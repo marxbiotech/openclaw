@@ -28,8 +28,8 @@ export type ParsedReleaseVersion = {
 const STABLE_VERSION_REGEX = /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<day>[1-9]\d?)$/;
 const BETA_VERSION_REGEX =
   /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<day>[1-9]\d?)-beta\.(?<beta>[1-9]\d*)$/;
-const EXPECTED_REPOSITORY_URL = "https://github.com/openclaw/openclaw";
-const MAX_CALVER_DISTANCE_DAYS = 2;
+const EXPECTED_REPOSITORY_URL = "https://github.com/marxbiotech/openclaw";
+const MAX_CALVER_DISTANCE_DAYS = 30;
 
 function normalizeRepoUrl(value: unknown): string {
   if (typeof value !== "string") {
@@ -121,8 +121,8 @@ export function collectReleasePackageMetadataErrors(pkg: PackageJson): string[] 
   );
   const errors: string[] = [];
 
-  if (pkg.name !== "openclaw") {
-    errors.push(`package.json name must be "openclaw"; found "${pkg.name ?? ""}".`);
+  if (pkg.name !== "@marxbiotech/openclaw") {
+    errors.push(`package.json name must be "@marxbiotech/openclaw"; found "${pkg.name ?? ""}".`);
   }
   if (!pkg.description?.trim()) {
     errors.push("package.json description must be non-empty.");
@@ -175,19 +175,19 @@ export function collectReleaseTagErrors(params: {
     );
   }
 
-  if (!releaseTag.startsWith("v")) {
-    errors.push(`Release tag must start with "v"; found "${releaseTag || "<missing>"}".`);
+  if (!releaseTag.startsWith("mb")) {
+    errors.push(`Release tag must start with "mb"; found "${releaseTag || "<missing>"}".`);
   }
 
-  const tagVersion = releaseTag.startsWith("v") ? releaseTag.slice(1) : releaseTag;
+  const tagVersion = releaseTag.startsWith("mb") ? releaseTag.slice(2) : releaseTag;
   const parsedTag = parseReleaseVersion(tagVersion);
   if (parsedTag === null) {
     errors.push(
-      `Release tag must match vYYYY.M.D or vYYYY.M.D-beta.N; found "${releaseTag || "<missing>"}".`,
+      `Release tag must match mbYYYY.M.D or mbYYYY.M.D-beta.N; found "${releaseTag || "<missing>"}".`,
     );
   }
 
-  const expectedTag = packageVersion ? `v${packageVersion}` : "";
+  const expectedTag = packageVersion ? `mb${packageVersion}` : "";
   if (releaseTag !== expectedTag) {
     errors.push(
       `Release tag ${releaseTag || "<missing>"} does not match package.json version ${

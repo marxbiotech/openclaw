@@ -1,0 +1,33 @@
+{
+  "id": "claude-node",
+  "name": "Claude Code (Node)",
+  "description": "Dispatch Claude Code CLI tasks to a paired node.",
+  "skills": ["./skills"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "nodeName": {
+        "type": "string",
+        "description": "Target node name/ID"
+      },
+      "defaultCwd": {
+        "type": "string",
+        "description": "Default working directory on node"
+      },
+      "timeoutMs": {
+        "type": "number",
+        "default": 600000,
+        "description": "Timeout for claude execution (ms)"
+      },
+      "model": {
+        "type": "string",
+        "description": "Model override for Claude Code CLI"
+      },
+      "dangerouslySkipPermissions": {
+        "type": "boolean",
+        "default": true
+      }
+    }
+  }
+}
