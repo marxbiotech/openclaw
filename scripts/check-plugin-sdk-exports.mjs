@@ -53,6 +53,7 @@ const requiredSubpathEntries = [
   "line",
   "msteams",
   "acpx",
+  "claude-node",
   "bluebubbles",
   "copilot-proxy",
   "device-pair",

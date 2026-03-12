@@ -53,6 +53,8 @@ const pluginSdkEntrypoints = [
   "line",
   "msteams",
   "acpx",
+  "remote-acpx",
+  "claude-node",
   "bluebubbles",
   "copilot-proxy",
   "device-pair",
