@@ -64,6 +64,11 @@ import {
   resolveCommandSecretsFromActiveRuntimeSnapshot,
 } from "../secrets/runtime.js";
 import { runOnboardingWizard } from "../wizard/onboarding.js";
+import {
+  registerAcpNodeChecker,
+  registerAcpNodeListProvider,
+  registerAcpNodeSender,
+} from "./acp-node-event-bridge.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
 import { startGatewayConfigReloader } from "./config-reload.js";
@@ -646,6 +651,14 @@ export async function startGatewayServer(
     broadcast("voicewake.changed", { triggers }, { dropIfSlow: true });
   };
   const hasMobileNodeConnected = () => hasConnectedMobileNode(nodeRegistry);
+  registerAcpNodeSender((nodeId, event, payload) => nodeRegistry.sendEvent(nodeId, event, payload));
+  registerAcpNodeChecker((nodeId) => nodeRegistry.get(nodeId) !== undefined);
+  registerAcpNodeListProvider(() =>
+    nodeRegistry
+      .listConnected()
+      .filter((n) => n.caps.includes("acp"))
+      .map((n) => ({ nodeId: n.nodeId, displayName: n.displayName })),
+  );
   applyGatewayLaneConcurrency(cfgAtStart);
 
   let cronState = buildGatewayCronService({

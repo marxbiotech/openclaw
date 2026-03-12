@@ -19,6 +19,7 @@ const entrypoints = [
   "line",
   "msteams",
   "acpx",
+  "remote-acpx",
   "bluebubbles",
   "copilot-proxy",
   "device-pair",
