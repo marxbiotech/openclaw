@@ -239,6 +239,7 @@ export class AcpSessionManager {
             mode: input.mode,
             resumeSessionId: input.resumeSessionId,
             cwd: requestedCwd,
+            nodeName: input.nodeName,
           }),
         fallbackCode: "ACP_SESSION_INIT_FAILED",
         fallbackMessage: "Could not initialize ACP session runtime.",

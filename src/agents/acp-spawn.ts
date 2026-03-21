@@ -70,6 +70,7 @@ export type SpawnAcpParams = {
   thread?: boolean;
   sandbox?: SpawnAcpSandboxMode;
   streamTo?: SpawnAcpStreamTarget;
+  nodeName?: string;
 };
 
 export type SpawnAcpContext = {
@@ -584,6 +585,7 @@ export async function spawnAcpDirect(
       resumeSessionId: params.resumeSessionId,
       cwd: params.cwd,
       backendId: cfg.acp?.backend,
+      nodeName: params.nodeName,
     });
     initializedRuntime = {
       runtime: initialized.runtime,

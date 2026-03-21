@@ -14,6 +14,8 @@ export type AgentRuntimeAcpConfig = {
   mode?: "persistent" | "oneshot";
   /** Optional runtime working directory override. */
   cwd?: string;
+  /** Display name of the Mac node to pin this agent to (resolved via acp-node-event-bridge). */
+  nodeName?: string;
 };
 
 export type AgentRuntimeConfig =
