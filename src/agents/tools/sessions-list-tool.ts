@@ -28,6 +28,8 @@ const SessionsListToolSchema = Type.Object({
   limit: Type.Optional(Type.Number({ minimum: 1 })),
   activeMinutes: Type.Optional(Type.Number({ minimum: 1 })),
   messageLimit: Type.Optional(Type.Number({ minimum: 0 })),
+  search: Type.Optional(Type.String()),
+  cwd: Type.Optional(Type.String()),
 });
 
 export function createSessionsListTool(opts?: {
@@ -84,6 +86,8 @@ export function createSessionsListTool(opts?: {
           includeGlobal: !restrictToSpawned,
           includeUnknown: !restrictToSpawned,
           spawnedBy: restrictToSpawned ? effectiveRequesterKey : undefined,
+          search: typeof params.search === "string" ? params.search.trim() || undefined : undefined,
+          cwd: typeof params.cwd === "string" ? params.cwd.trim() || undefined : undefined,
         },
       });
 
