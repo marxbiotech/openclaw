@@ -1,7 +1,7 @@
 ---
 summary: "Node affinity for ACP sessions and cwd-based session filtering"
 read_when:
-  - Configuring per-agent Mac node affinity for remote ACP dispatch
+  - Configuring per-agent node affinity for remote ACP dispatch
   - Filtering sessions by working directory
   - Understanding how nodeName flows through the ACP session initialization chain
 title: "Session Node Affinity and CWD Filtering"
@@ -11,10 +11,9 @@ title: "Session Node Affinity and CWD Filtering"
 
 ## Node affinity (`nodeName`)
 
-When running ACP sessions across multiple Mac nodes via remote dispatch, each agent
+When running ACP sessions across multiple nodes via remote dispatch, each agent
 can be pinned to a specific node using the `nodeName` configuration field. The
-backend (for example acpx) resolves this display name to an actual node target via
-`acp-node-event-bridge`.
+backend (for example acpx) resolves this display name to an actual node target.
 
 ### Configuration
 
