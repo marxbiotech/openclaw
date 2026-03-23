@@ -12,6 +12,7 @@ import {
 } from "../agents/identity-file.js";
 import { listRouteBindings } from "../config/bindings.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { AgentRuntimeConfig } from "../config/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 
 export type AgentSummary = {
@@ -28,6 +29,7 @@ export type AgentSummary = {
   routes?: string[];
   providers?: string[];
   isDefault: boolean;
+  runtime?: AgentRuntimeConfig;
 };
 
 type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
@@ -99,9 +101,8 @@ export function buildAgentSummaries(cfg: OpenClawConfig): AgentSummary[] {
   return ordered.map((id) => {
     const workspace = resolveAgentWorkspaceDir(cfg, id);
     const identity = loadAgentIdentity(workspace);
-    const configIdentity = configuredAgents.find(
-      (agent) => normalizeAgentId(agent.id) === id,
-    )?.identity;
+    const agentEntry = configuredAgents.find((agent) => normalizeAgentId(agent.id) === id);
+    const configIdentity = agentEntry?.identity;
     const identityName = identity?.name ?? configIdentity?.name?.trim();
     const identityEmoji = identity?.emoji ?? configIdentity?.emoji?.trim();
     const identitySource = identity
@@ -120,6 +121,7 @@ export function buildAgentSummaries(cfg: OpenClawConfig): AgentSummary[] {
       model: resolveAgentModel(cfg, id),
       bindings: bindingCounts.get(id) ?? 0,
       isDefault: id === defaultAgentId,
+      ...(agentEntry?.runtime ? { runtime: agentEntry.runtime } : {}),
     };
   });
 }
