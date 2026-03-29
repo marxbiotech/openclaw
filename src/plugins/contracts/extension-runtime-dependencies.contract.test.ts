@@ -9,9 +9,15 @@ const BUILTIN_MODULES = new Set(builtinModules.map((moduleId) => moduleId.replac
 const OPTIONAL_UNDECLARED_RUNTIME_IMPORTS = new Map<string, Set<string>>([
   [
     "extensions/discord",
-    // Prefer the pure-JS opusscript decoder, but keep the optional native decoder
-    // fallback for users who install it themselves.
-    new Set(["@discordjs/opus"]),
+    new Set([
+      // Prefer the pure-JS opusscript decoder, but keep the optional native decoder
+      // fallback for users who install it themselves.
+      "@discordjs/opus",
+      // @buape/carbon is ESM-only (no CJS exports condition). It must be inlined
+      // by the bundler to avoid ERR_PACKAGE_PATH_NOT_EXPORTED under jiti/Node 24,
+      // so it lives in devDependencies rather than runtime dependencies.
+      "@buape/carbon",
+    ]),
   ],
 ]);
 const INDIRECT_RUNTIME_DEPENDENCIES = new Map<string, Set<string>>([
