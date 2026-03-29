@@ -527,6 +527,7 @@ export async function handleAcpSpawnAction(
       agent: spawn.agentId,
       mode: spawn.mode,
       cwd: spawn.cwd,
+      nodeName: spawn.nodeName,
     });
     initializedRuntime = {
       runtime: initialized.runtime,

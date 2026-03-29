@@ -357,6 +357,7 @@ Use `agents.list[].runtime` to define ACP defaults once per agent:
 - `agents.list[].runtime.acp.backend`
 - `agents.list[].runtime.acp.mode`
 - `agents.list[].runtime.acp.cwd`
+- `agents.list[].runtime.acp.nodeName` (display name of a node for remote dispatch affinity; resolved by the backend)
 
 **Override precedence for ACP bound sessions:**
 
@@ -379,6 +380,7 @@ Use `agents.list[].runtime` to define ACP defaults once per agent:
             backend: "acpx",
             mode: "persistent",
             cwd: "/workspace/openclaw",
+            nodeName: "mac-mini-m4",
           },
         },
       },

@@ -40,6 +40,7 @@ const SessionsListToolSchema = Type.Object({
   label: Type.Optional(Type.String({ minLength: 1 })),
   agentId: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
   search: Type.Optional(Type.String({ minLength: 1 })),
+  cwd: Type.Optional(Type.String()),
   includeDerivedTitles: Type.Optional(Type.Boolean()),
   includeLastMessage: Type.Optional(Type.Boolean()),
 });
@@ -107,6 +108,7 @@ export function createSessionsListTool(opts?: {
       const label = readStringParam(params, "label");
       const agentId = readStringParam(params, "agentId");
       const search = readStringParam(params, "search");
+      const cwd = readStringParam(params, "cwd");
       const includeDerivedTitles = params.includeDerivedTitles === true;
       const includeLastMessage = params.includeLastMessage === true;
       const gatewayCall = opts?.callGateway ?? callGateway;
@@ -119,6 +121,7 @@ export function createSessionsListTool(opts?: {
           label,
           agentId,
           search,
+          cwd,
           includeGlobal: !restrictToSpawned,
           includeUnknown: !restrictToSpawned,
           spawnedBy: restrictToSpawned ? effectiveRequesterKey : undefined,

@@ -1454,6 +1454,112 @@ describe("deriveSessionTitle", () => {
   });
 });
 
+describe("listSessionsFromStore cwd filters", () => {
+  const baseCfg = {
+    session: { mainKey: "main" },
+    agents: { list: [{ id: "main", default: true }] },
+  } as OpenClawConfig;
+
+  test("filters sessions by cwd case-insensitively", () => {
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      "agent:main:acp:a": {
+        sessionId: "sess-a",
+        updatedAt: now,
+        displayName: "Codex A",
+        acp: {
+          backend: "acpx",
+          agent: "codex",
+          runtimeSessionName: "a",
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: now,
+          cwd: "/workspace/openclaw",
+        },
+      } as SessionEntry,
+      "agent:main:acp:b": {
+        sessionId: "sess-b",
+        updatedAt: now - 1000,
+        displayName: "Codex B",
+        acp: {
+          backend: "acpx",
+          agent: "codex",
+          runtimeSessionName: "b",
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: now,
+          cwd: "/workspace/other-repo",
+        },
+      } as SessionEntry,
+      "agent:main:plain": {
+        sessionId: "sess-c",
+        updatedAt: now - 2000,
+        displayName: "No ACP",
+      } as SessionEntry,
+    };
+
+    const openclawResult = listSessionsFromStore({
+      cfg: baseCfg,
+      storePath: "/tmp/s.json",
+      store,
+      opts: { cwd: "openclaw" },
+    });
+    expect(openclawResult.sessions.map((session) => session.key)).toEqual(["agent:main:acp:a"]);
+
+    const workspaceResult = listSessionsFromStore({
+      cfg: baseCfg,
+      storePath: "/tmp/s.json",
+      store,
+      opts: { cwd: "/WORKSPACE" },
+    });
+    expect(workspaceResult.sessions.map((session) => session.key).toSorted()).toEqual([
+      "agent:main:acp:a",
+      "agent:main:acp:b",
+    ]);
+
+    const emptyResult = listSessionsFromStore({
+      cfg: baseCfg,
+      storePath: "/tmp/s.json",
+      store,
+      opts: { cwd: "" },
+    });
+    expect(emptyResult.sessions).toHaveLength(3);
+  });
+
+  test("search matches ACP cwd", () => {
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      "agent:main:acp:x": {
+        sessionId: "sess-x",
+        updatedAt: now,
+        displayName: "Agent X",
+        acp: {
+          backend: "acpx",
+          agent: "codex",
+          runtimeSessionName: "x",
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: now,
+          cwd: "/home/user/my-unique-project",
+        },
+      } as SessionEntry,
+      "agent:main:other": {
+        sessionId: "sess-y",
+        updatedAt: now,
+        displayName: "Agent Y",
+      } as SessionEntry,
+    };
+
+    const result = listSessionsFromStore({
+      cfg: baseCfg,
+      storePath: "/tmp/s.json",
+      store,
+      opts: { search: "my-unique-project" },
+    });
+    expect(result.sessions.map((session) => session.key)).toEqual(["agent:main:acp:x"]);
+  });
+});
+
 describe("resolveGatewayModelSupportsImages", () => {
   test("keeps Foundry GPT deployments image-capable even when stale catalog metadata says text-only", async () => {
     await expect(

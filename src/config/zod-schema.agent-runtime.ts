@@ -790,6 +790,7 @@ const AgentRuntimeAcpSchema = z
     backend: z.string().optional(),
     mode: z.enum(["persistent", "oneshot"]).optional(),
     cwd: z.string().optional(),
+    nodeName: z.string().min(1).optional(),
   })
   .strict()
   .optional();

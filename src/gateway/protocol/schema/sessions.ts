@@ -56,6 +56,8 @@ export const SessionsListParamsSchema = Type.Object(
     spawnedBy: Type.Optional(NonEmptyString),
     agentId: Type.Optional(NonEmptyString),
     search: Type.Optional(Type.String()),
+    /** Filter by ACP session cwd (case-insensitive substring match). */
+    cwd: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
 );

@@ -47,6 +47,7 @@ export type AcpInitializeSessionInput = {
   runtimeOptions?: Partial<AcpSessionRuntimeOptions>;
   cwd?: string;
   backendId?: string;
+  nodeName?: string;
 };
 
 export type AcpTurnAttachment = {
