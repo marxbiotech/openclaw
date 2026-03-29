@@ -42,8 +42,16 @@ const BETA_VERSION_REGEX =
   /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<day>[1-9]\d?)-beta\.(?<beta>[1-9]\d*)$/;
 const CORRECTION_VERSION_REGEX =
   /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<day>[1-9]\d?)-(?<correction>[1-9]\d*)$/;
-const EXPECTED_REPOSITORY_URL = "https://github.com/openclaw/openclaw";
-const MAX_CALVER_DISTANCE_DAYS = 2;
+const EXPECTED_REPOSITORY_URLS = new Set([
+  "https://github.com/openclaw/openclaw",
+  "https://github.com/marxbiotech/openclaw",
+]);
+// Fork release trains (e.g. marxbiotech/remote-acp) pin CalVer to the upstream
+// cut date. OPENCLAW_RELEASE_CALVER_MAX_DAYS lets CI widen the window explicitly.
+const MAX_CALVER_DISTANCE_DAYS = Number.parseInt(
+  process.env.OPENCLAW_RELEASE_CALVER_MAX_DAYS ?? "2",
+  10,
+);
 const REQUIRED_PACKED_PATHS = ["dist/control-ui/index.html"];
 const CONTROL_UI_ASSET_PREFIX = "dist/control-ui/assets/";
 const NPM_PACK_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
@@ -107,7 +115,7 @@ function parseDateParts(
 }
 
 export function parseReleaseVersion(version: string): ParsedReleaseVersion | null {
-  const trimmed = version.trim();
+  const trimmed = version.trim().replace(/^mb/, "");
   if (!trimmed) {
     return null;
   }
@@ -183,9 +191,9 @@ export function collectReleasePackageMetadataErrors(pkg: PackageJson): string[] 
   if (pkg.license !== "MIT") {
     errors.push(`package.json license must be "MIT"; found "${pkg.license ?? ""}".`);
   }
-  if (actualRepositoryUrl !== EXPECTED_REPOSITORY_URL) {
+  if (!EXPECTED_REPOSITORY_URLS.has(actualRepositoryUrl)) {
     errors.push(
-      `package.json repository.url must resolve to ${EXPECTED_REPOSITORY_URL}; found ${
+      `package.json repository.url must resolve to one of ${[...EXPECTED_REPOSITORY_URLS].join(", ")}; found ${
         actualRepositoryUrl || "<missing>"
       }.`,
     );
@@ -224,15 +232,15 @@ export function collectReleaseTagErrors(params: {
   const parsedVersion = parseReleaseVersion(packageVersion);
   if (parsedVersion === null) {
     errors.push(
-      `package.json version must match YYYY.M.D, YYYY.M.D-N, or YYYY.M.D-beta.N; found "${packageVersion || "<missing>"}".`,
+      `package.json version must match [mb]YYYY.M.D, [mb]YYYY.M.D-N, or [mb]YYYY.M.D-beta.N; found "${packageVersion || "<missing>"}".`,
     );
   }
 
-  if (!releaseTag.startsWith("mb")) {
-    errors.push(`Release tag must start with "mb"; found "${releaseTag || "<missing>"}".`);
+  if (!releaseTag.startsWith("v") && !releaseTag.startsWith("mb")) {
+    errors.push(`Release tag must start with "v" or "mb"; found "${releaseTag || "<missing>"}".`);
   }
 
-  const tagVersion = releaseTag.startsWith("v") ? releaseTag.slice(1) : releaseTag;
+  const tagVersion = releaseTag.replace(/^(v|mb)/, "");
   const parsedTag = parseReleaseTagVersion(tagVersion);
   if (parsedTag === null) {
     errors.push(
