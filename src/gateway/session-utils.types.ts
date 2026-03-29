@@ -45,6 +45,7 @@ export type GatewaySessionRow = {
   spawnedBy?: string;
   spawnedWorkspaceDir?: string;
   spawnedCwd?: string;
+  acpCwd?: string;
   forkedFromParent?: boolean;
   spawnDepth?: number;
   subagentRole?: SessionEntry["subagentRole"];

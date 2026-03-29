@@ -186,6 +186,8 @@ export const SessionsListParamsSchema = Type.Object(
     spawnedBy: Type.Optional(NonEmptyString),
     agentId: Type.Optional(NonEmptyString),
     search: Type.Optional(Type.String()),
+    /** Filter by ACP session cwd (case-insensitive substring match). */
+    cwd: Type.Optional(Type.String()),
     /** True lists archived sessions; false or omitted lists active sessions. */
     archived: Type.Optional(Type.Boolean()),
   },

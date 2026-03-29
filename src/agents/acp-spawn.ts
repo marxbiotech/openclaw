@@ -137,6 +137,7 @@ type SpawnAcpParams = {
   sandbox?: SpawnAcpSandboxMode;
   streamTo?: SpawnAcpStreamTarget;
   attachments?: AcpTurnAttachment[];
+  nodeName?: string;
 };
 
 type GatewayImageAttachmentInput = {
@@ -1075,6 +1076,8 @@ async function initializeAcpSpawnRuntime(params: {
   resumeSessionId?: string;
   runtimeOptions?: AcpSpawnRuntimeOptions;
   cwd?: string;
+  backendId?: string;
+  nodeName?: string;
 }): Promise<AcpSpawnInitializedRuntime> {
   const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.targetAgentId });
   let sessionEntry = loadSessionEntry({
@@ -1103,6 +1106,7 @@ async function initializeAcpSpawnRuntime(params: {
     runtimeOptions: params.runtimeOptions,
     cwd: params.cwd,
     backendId: params.cfg.acp?.backend,
+    nodeName: params.nodeName,
   });
 
   return {
@@ -1501,6 +1505,8 @@ export async function spawnAcpDirect(
       resumeSessionId: params.resumeSessionId,
       runtimeOptions: runtimeOptionsResult.runtimeOptions,
       cwd: runtimeCwd,
+      backendId: cfg.acp?.backend,
+      nodeName: params.nodeName,
     });
     initializedRuntime = initializedSession.runtimeCloseHandle;
 

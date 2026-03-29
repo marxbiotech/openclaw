@@ -63,6 +63,7 @@ export type ParsedSpawnInput = {
   bind: AcpSpawnBindMode;
   cwd?: string;
   label?: string;
+  nodeName?: string;
 };
 
 export type ParsedSteerInput = {
@@ -304,6 +305,7 @@ export function parseSpawnInput(
   // runtime.acp.cwd as default cwd (user --cwd flag takes precedence).
   let resolvedAgent = selectedAgent;
   let resolvedCwd = cwd;
+  let resolvedNodeName: string | undefined;
   const agentsList = params.cfg.agents?.list;
   if (Array.isArray(agentsList)) {
     const entry = agentsList.find(
@@ -314,6 +316,7 @@ export function parseSpawnInput(
       if (!resolvedCwd && entry.runtime.acp?.cwd) {
         resolvedCwd = entry.runtime.acp.cwd;
       }
+      resolvedNodeName = entry.runtime.acp?.nodeName?.trim() || undefined;
     }
   }
   const normalizedAgentId = normalizeAgentId(resolvedAgent);
@@ -336,6 +339,7 @@ export function parseSpawnInput(
       bind,
       cwd: resolvedCwd,
       label: label || (selectedAgent !== resolvedAgent ? selectedAgent : undefined),
+      nodeName: resolvedNodeName,
     },
   };
 }

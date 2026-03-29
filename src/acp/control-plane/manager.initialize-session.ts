@@ -61,6 +61,7 @@ export async function runManagerInitializeSession(params: {
         ...(requestedModel ? { model: requestedModel } : {}),
         ...(requestedThinking ? { thinking: requestedThinking } : {}),
         cwd: requestedCwd,
+        nodeName: input.nodeName,
       }),
     fallbackCode: "ACP_SESSION_INIT_FAILED",
     fallbackMessage: "Could not initialize ACP session runtime.",
