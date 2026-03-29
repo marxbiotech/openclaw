@@ -62,6 +62,11 @@ import {
 } from "../secrets/runtime-state.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
+import {
+  registerAcpNodeChecker,
+  registerAcpNodeListProvider,
+  registerAcpNodeSender,
+} from "./acp-node-event-bridge.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { resolveGatewayAuth } from "./auth.js";
 import type { RestartRecoveryCandidate } from "./chat-abort.js";
@@ -960,6 +965,14 @@ export async function startGatewayServer(
       (cfgAtStart.gateway?.terminal?.detachedSessionTimeoutSeconds ??
         DEFAULT_TERMINAL_DETACH_SECONDS) * 1000,
   });
+  registerAcpNodeSender((nodeId, event, payload) => nodeRegistry.sendEvent(nodeId, event, payload));
+  registerAcpNodeChecker((nodeId) => nodeRegistry.get(nodeId) !== undefined);
+  registerAcpNodeListProvider(() =>
+    nodeRegistry
+      .listConnected()
+      .filter((node) => node.caps.includes("acp"))
+      .map((node) => ({ nodeId: node.nodeId, displayName: node.displayName })),
+  );
   applyGatewayLaneConcurrency(cfgAtStart);
 
   runtimeState = createGatewayServerLiveState({
