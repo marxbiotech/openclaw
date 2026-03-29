@@ -270,8 +270,8 @@ export function collectReleasePackageMetadataErrors(pkg: PackageJson): string[] 
   );
   const errors: string[] = [];
 
-  if (pkg.name !== "openclaw") {
-    errors.push(`package.json name must be "openclaw"; found "${pkg.name ?? ""}".`);
+  if (pkg.name !== "@marxbiotech/openclaw") {
+    errors.push(`package.json name must be "@marxbiotech/openclaw"; found "${pkg.name ?? ""}".`);
   }
   if (!pkg.description?.trim()) {
     errors.push("package.json description must be non-empty.");
@@ -334,8 +334,8 @@ export function collectReleaseTagErrors(params: {
     );
   }
 
-  if (!releaseTag.startsWith("v")) {
-    errors.push(`Release tag must start with "v"; found "${releaseTag || "<missing>"}".`);
+  if (!releaseTag.startsWith("mb")) {
+    errors.push(`Release tag must start with "mb"; found "${releaseTag || "<missing>"}".`);
   }
 
   const tagVersion = releaseTag.startsWith("v") ? releaseTag.slice(1) : releaseTag;

@@ -97,6 +97,8 @@
   "acp-runtime",
   "acp-binding-runtime",
   "acp-binding-resolve-runtime",
+  "acpx",
+  "remote-acpx",
   "lazy-runtime",
   "testing",
   "temp-path",

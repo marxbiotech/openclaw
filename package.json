@@ -3,15 +3,15 @@
   "version": "2026.4.26",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
-  "homepage": "https://github.com/openclaw/openclaw#readme",
+  "homepage": "https://github.com/marxbiotech/openclaw#readme",
   "bugs": {
-    "url": "https://github.com/openclaw/openclaw/issues"
+    "url": "https://github.com/marxbiotech/openclaw/issues"
   },
   "license": "MIT",
   "author": "",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/openclaw/openclaw.git"
+    "url": "git+https://github.com/marxbiotech/openclaw.git"
   },
   "bin": {
     "openclaw": "openclaw.mjs"
@@ -453,6 +453,14 @@
     "./plugin-sdk/acp-binding-resolve-runtime": {
       "types": "./dist/plugin-sdk/acp-binding-resolve-runtime.d.ts",
       "default": "./dist/plugin-sdk/acp-binding-resolve-runtime.js"
+    },
+    "./plugin-sdk/acpx": {
+      "types": "./dist/plugin-sdk/acpx.d.ts",
+      "default": "./dist/plugin-sdk/acpx.js"
+    },
+    "./plugin-sdk/remote-acpx": {
+      "types": "./dist/plugin-sdk/remote-acpx.d.ts",
+      "default": "./dist/plugin-sdk/remote-acpx.js"
     },
     "./plugin-sdk/lazy-runtime": {
       "types": "./dist/plugin-sdk/lazy-runtime.d.ts",

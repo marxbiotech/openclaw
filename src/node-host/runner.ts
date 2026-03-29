@@ -11,6 +11,7 @@ import { NODE_EXEC_APPROVALS_COMMANDS, NODE_SYSTEM_RUN_COMMANDS } from "../infra
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { VERSION } from "../version.js";
 import { ensureNodeHostConfig, saveNodeHostConfig, type NodeHostGatewayConfig } from "./config.js";
+import { handleAcpEvent } from "./invoke-acp.js";
 import {
   coerceNodeInvokePayload,
   type SkillBinsProvider,
@@ -230,17 +231,26 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     mode: GATEWAY_CLIENT_MODES.NODE,
     role: "node",
     scopes: [],
-    caps: ["system", ...pluginNodeHost.caps],
-    commands: [
-      ...NODE_SYSTEM_RUN_COMMANDS,
-      ...NODE_EXEC_APPROVALS_COMMANDS,
-      ...pluginNodeHost.commands,
-    ],
+    caps: Array.from(new Set(["system", "acp", ...pluginNodeHost.caps])),
+    commands: Array.from(
+      new Set([
+        ...NODE_SYSTEM_RUN_COMMANDS,
+        ...NODE_EXEC_APPROVALS_COMMANDS,
+        ...pluginNodeHost.commands,
+        "acp.spawn",
+        "acp.turn",
+        "acp.kill",
+      ]),
+    ),
     pathEnv,
     permissions: undefined,
     deviceIdentity: loadOrCreateDeviceIdentity(),
     tlsFingerprint: gateway.tlsFingerprint,
     onEvent: (evt) => {
+      if (evt.event.startsWith("acp.")) {
+        handleAcpEvent(evt, client);
+        return;
+      }
       if (evt.event !== "node.invoke.request") {
         return;
       }
