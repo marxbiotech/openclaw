@@ -1,10 +1,13 @@
 name: OpenClaw NPM Release
 
 on:
+  push:
+    tags:
+      - "mb*"
   workflow_dispatch:
     inputs:
       tag:
-        description: Release tag to publish (for example v2026.3.22, v2026.3.22-beta.1, or fallback v2026.3.22-1)
+        description: Release tag to publish (for example v2026.3.22, mb2026.3.28-beta.1)
         required: true
         type: string
       preflight_only:
@@ -14,7 +17,7 @@ on:
         type: boolean
 
 concurrency:
-  group: openclaw-npm-release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+  group: openclaw-npm-release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 env:
@@ -30,10 +33,10 @@ jobs:
     steps:
       - name: Validate tag input format
         env:
-          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
-          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-beta\.[1-9][0-9]*)|(-[1-9][0-9]*))?$ ]]; then
+          if [[ ! "${RELEASE_TAG}" =~ ^(v|mb)[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-beta\.[1-9][0-9]*)|(-[1-9][0-9]*))?$ ]]; then
             echo "Invalid release tag format: ${RELEASE_TAG}"
             exit 1
           fi
@@ -41,7 +44,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: refs/tags/${{ inputs.tag }}
+          ref: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.ref }}
           fetch-depth: 0
 
       - name: Setup Node environment
@@ -59,16 +62,16 @@ jobs:
           set -euo pipefail
           PACKAGE_VERSION=$(node -p "require('./package.json').version")
 
-          if npm view "openclaw@${PACKAGE_VERSION}" version >/dev/null 2>&1; then
+          if npm view "@marxbiotech/openclaw@${PACKAGE_VERSION}" version >/dev/null 2>&1; then
             if [[ "${PREFLIGHT_ONLY}" == "true" ]]; then
-              echo "openclaw@${PACKAGE_VERSION} is already published on npm; continuing because preflight_only=true."
+              echo "@marxbiotech/openclaw@${PACKAGE_VERSION} is already published on npm; continuing because preflight_only=true."
               exit 0
             fi
-            echo "openclaw@${PACKAGE_VERSION} is already published on npm."
+            echo "@marxbiotech/openclaw@${PACKAGE_VERSION} is already published on npm."
             exit 1
           fi
 
-          echo "Publishing openclaw@${PACKAGE_VERSION}"
+          echo "Publishing @marxbiotech/openclaw@${PACKAGE_VERSION}"
 
       - name: Check
         run: pnpm check
@@ -79,42 +82,45 @@ jobs:
       - name: Build Control UI
         run: pnpm ui:build
 
+      - name: Sync generated baselines
+        run: pnpm plugin-sdk:api:gen && pnpm config:docs:gen
+
       - name: Validate release tag and package metadata
         env:
-          RELEASE_TAG: ${{ inputs.tag }}
-          RELEASE_MAIN_REF: origin/main
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+          RELEASE_MAIN_REF: origin/marxbiotech/remote-acp
+          # Fork release train: CalVer is pinned to the upstream cut date
+          OPENCLAW_RELEASE_CALVER_MAX_DAYS: "90"
         run: |
           set -euo pipefail
           RELEASE_SHA=$(git rev-parse HEAD)
           export RELEASE_SHA RELEASE_TAG RELEASE_MAIN_REF
-          # Fetch the full main ref so merge-base ancestry checks keep working
-          # for older tagged commits that are still contained in main.
-          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          git fetch --no-tags origin +refs/heads/marxbiotech/remote-acp:refs/remotes/origin/marxbiotech/remote-acp
           pnpm release:openclaw:npm:check
 
       - name: Verify release contents
         run: pnpm release:check
 
   validate_publish_dispatch_ref:
-    if: ${{ !inputs.preflight_only }}
+    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.preflight_only }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
-      - name: Require main workflow ref for publish
+      - name: Require known branch for publish
         env:
           WORKFLOW_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
-          if [[ "${WORKFLOW_REF}" != "refs/heads/main" ]]; then
-            echo "Real publish runs must be dispatched from main. Use preflight_only=true for branch validation."
+          if [[ "${WORKFLOW_REF}" != "refs/heads/main" && "${WORKFLOW_REF}" != "refs/heads/marxbiotech/remote-acp" ]]; then
+            echo "Real publish runs must be dispatched from main or marxbiotech/remote-acp."
             exit 1
           fi
 
   publish_openclaw_npm:
     # npm trusted publishing + provenance requires a GitHub-hosted runner.
     needs: [preflight_openclaw_npm, validate_publish_dispatch_ref]
-    if: ${{ !inputs.preflight_only }}
+    if: ${{ always() && needs.preflight_openclaw_npm.result == 'success' && (github.event_name == 'push' || needs.validate_publish_dispatch_ref.result == 'success') }}
     runs-on: ubuntu-latest
     environment: npm-release
     permissions:
@@ -123,10 +129,10 @@ jobs:
     steps:
       - name: Validate tag input format
         env:
-          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
-          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-beta\.[1-9][0-9]*)|(-[1-9][0-9]*))?$ ]]; then
+          if [[ ! "${RELEASE_TAG}" =~ ^(v|mb)[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-beta\.[1-9][0-9]*)|(-[1-9][0-9]*))?$ ]]; then
             echo "Invalid release tag format: ${RELEASE_TAG}"
             exit 1
           fi
@@ -134,7 +140,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: refs/tags/${{ inputs.tag }}
+          ref: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.ref }}
           fetch-depth: 0
 
       - name: Setup Node environment
@@ -163,17 +169,19 @@ jobs:
       - name: Build Control UI
         run: pnpm ui:build
 
+      - name: Sync generated baselines
+        run: pnpm plugin-sdk:api:gen && pnpm config:docs:gen
+
       - name: Validate release tag and package metadata
         env:
-          RELEASE_TAG: ${{ inputs.tag }}
-          RELEASE_MAIN_REF: origin/main
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+          RELEASE_MAIN_REF: origin/marxbiotech/remote-acp
+          OPENCLAW_RELEASE_CALVER_MAX_DAYS: "90"
         run: |
           set -euo pipefail
           RELEASE_SHA=$(git rev-parse HEAD)
           export RELEASE_SHA RELEASE_TAG RELEASE_MAIN_REF
-          # Fetch the full main ref so merge-base ancestry checks keep working
-          # for older tagged commits that are still contained in main.
-          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          git fetch --no-tags origin +refs/heads/marxbiotech/remote-acp:refs/remotes/origin/marxbiotech/remote-acp
           pnpm release:openclaw:npm:check
 
       - name: Publish
