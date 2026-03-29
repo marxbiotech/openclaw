@@ -5348,6 +5348,16 @@
       "hasChildren": false
     },
     {
+      "path": "agents.list.*.runtime.acp.nodeName",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "agents.list.*.runtime.type",
       "kind": "core",
       "type": "string",
