@@ -45,6 +45,8 @@
   "process-runtime",
   "windows-spawn",
   "acp-runtime",
+  "acpx",
+  "remote-acpx",
   "lazy-runtime",
   "testing",
   "temp-path",
