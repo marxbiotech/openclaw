@@ -13,6 +13,7 @@ import { registerApnsRegistration } from "../infra/push-apns.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { normalizeMainKey, scopedHeartbeatWakeOptions } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
+import { getAcpNodeEventHandler } from "./acp-node-event-bridge.js";
 import { parseMessageWithAttachments } from "./chat-attachments.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./server-methods/attachment-normalize.js";
 import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
@@ -582,6 +583,17 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       // keys should keep legacy unscoped behavior so enabled non-main heartbeat
       // agents still run when no explicit agent session is provided.
       requestHeartbeatNow(scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event" }));
+      return;
+    }
+    case "acp.spawned":
+    case "acp.message":
+    case "acp.exited":
+    case "acp.error": {
+      const payload = parsePayloadObject(evt.payloadJSON);
+      if (!payload) {
+        return;
+      }
+      getAcpNodeEventHandler()?.(nodeId, { event: evt.event, payload });
       return;
     }
     case "push.apns.register": {

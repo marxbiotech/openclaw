@@ -15,6 +15,7 @@ import { resolveBrowserConfig } from "../plugin-sdk/browser-runtime.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { VERSION } from "../version.js";
 import { ensureNodeHostConfig, saveNodeHostConfig, type NodeHostGatewayConfig } from "./config.js";
+import { handleAcpEvent } from "./invoke-acp.js";
 import {
   coerceNodeInvokePayload,
   type SkillBinsProvider,
@@ -190,17 +191,24 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     mode: GATEWAY_CLIENT_MODES.NODE,
     role: "node",
     scopes: [],
-    caps: ["system", ...(browserProxyEnabled ? ["browser"] : [])],
+    caps: ["system", "acp", ...(browserProxyEnabled ? ["browser"] : [])],
     commands: [
       ...NODE_SYSTEM_RUN_COMMANDS,
       ...NODE_EXEC_APPROVALS_COMMANDS,
       ...(browserProxyEnabled ? [NODE_BROWSER_PROXY_COMMAND] : []),
+      "acp.spawn",
+      "acp.turn",
+      "acp.kill",
     ],
     pathEnv,
     permissions: undefined,
     deviceIdentity: loadOrCreateDeviceIdentity(),
     tlsFingerprint: gateway.tlsFingerprint,
     onEvent: (evt) => {
+      if (evt.event.startsWith("acp.")) {
+        handleAcpEvent(evt, client);
+        return;
+      }
       if (evt.event !== "node.invoke.request") {
         return;
       }

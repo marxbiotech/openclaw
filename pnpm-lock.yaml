@@ -272,6 +272,12 @@ importers:
 
   extensions/cloudflare-ai-gateway: {}
 
+  extensions/claude-node:
+    dependencies:
+      '@sinclair/typebox':
+        specifier: 0.34.48
+        version: 0.34.48
+
   extensions/copilot-proxy: {}
 
   extensions/deepgram: {}

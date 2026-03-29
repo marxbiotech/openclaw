@@ -126,6 +126,7 @@ type PreparedAcpThreadBinding = {
   channel: string;
   accountId: string;
   conversationId: string;
+  placement: "current" | "child";
 };
 
 type AcpSpawnInitializedSession = Awaited<
@@ -414,10 +415,19 @@ function prepareAcpThreadBinding(params: {
       error: `Thread bindings are unavailable for ${policy.channel}.`,
     };
   }
-  if (!capabilities.bindSupported || !capabilities.placements.includes("child")) {
+  if (!capabilities.bindSupported) {
     return {
       ok: false,
-      error: `Thread bindings do not support ACP thread spawn for ${policy.channel}.`,
+      error: `Thread bindings are unavailable for ${policy.channel}.`,
+    };
+  }
+  // Telegram has no child-thread concept — always bind to the current conversation.
+  // Other channels create a new child thread for session isolation.
+  const placement: "current" | "child" = channel === "telegram" ? "current" : "child";
+  if (!capabilities.placements.includes(placement)) {
+    return {
+      ok: false,
+      error: `Thread bindings do not support ${placement} placement for ${policy.channel}.`,
     };
   }
   const conversationId = resolveConversationIdForThreadBinding({
@@ -437,6 +447,7 @@ function prepareAcpThreadBinding(params: {
       channel: policy.channel,
       accountId: policy.accountId,
       conversationId,
+      placement,
     },
   };
 }
