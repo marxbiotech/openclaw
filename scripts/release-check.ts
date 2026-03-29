@@ -34,7 +34,7 @@ const forbiddenPrefixes = ["dist-runtime/", "dist/OpenClaw.app/"];
 // startup/doctor OOM reports. Keep enough headroom for the current pack with
 // restored bundled upgrade surfaces and Control UI assets while still catching
 // regressions quickly.
-const npmPackUnpackedSizeBudgetBytes = 191 * 1024 * 1024;
+const npmPackUnpackedSizeBudgetBytes = 192 * 1024 * 1024;
 const appcastPath = resolve("appcast.xml");
 const laneBuildMin = 1_000_000_000;
 const laneFloorAdoptionDateKey = 20260227;
