@@ -8191,6 +8191,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                               description:
                                 "Optional default working directory for this agent's ACP sessions.",
                             },
+                            nodeName: {
+                              type: "string",
+                              minLength: 1,
+                            },
                           },
                           additionalProperties: false,
                           title: "Agent ACP Runtime",

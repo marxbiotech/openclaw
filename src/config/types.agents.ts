@@ -25,6 +25,8 @@ export type AgentRuntimeAcpConfig = {
   mode?: "persistent" | "oneshot";
   /** Optional runtime working directory override. */
   cwd?: string;
+  /** Display name of the node to pin this agent to for remote ACP dispatch. */
+  nodeName?: string;
 };
 
 export type AgentRuntimeConfig =

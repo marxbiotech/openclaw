@@ -47,8 +47,9 @@ effective tool list.
 
 `sessions_list` returns sessions with their key, agentId, kind, channel, model,
 token counts, and timestamps. Filter by kind (`main`, `group`, `cron`, `hook`,
-`node`), exact `label`, exact `agentId`, search text, or recency
-(`activeMinutes`). When you need mailbox-style triage, it can also ask for a
+`node`), exact `label`, exact `agentId`, search text, ACP working directory
+(`cwd`), or recency (`activeMinutes`). Search also matches ACP working
+directories. When you need mailbox-style triage, it can also ask for a
 visibility-scoped derived title, a last-message preview snippet, or bounded
 recent messages on each row. Derived titles and previews are produced only for
 sessions the caller can already see under the configured session tool
