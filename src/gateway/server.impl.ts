@@ -53,6 +53,11 @@ import {
   getInspectableTaskRegistrySummary,
   stopTaskRegistryMaintenance,
 } from "../tasks/task-registry.maintenance.js";
+import {
+  registerAcpNodeChecker,
+  registerAcpNodeListProvider,
+  registerAcpNodeSender,
+} from "./acp-node-event-bridge.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { resolveGatewayAuth } from "./auth.js";
 import { createGatewayAuxHandlers } from "./server-aux-handlers.js";
@@ -796,6 +801,14 @@ export async function startGatewayServer(
     broadcastVoiceWakeChanged,
     hasMobileNodeConnected,
   } = createGatewayNodeSessionRuntime({ broadcast });
+  registerAcpNodeSender((nodeId, event, payload) => nodeRegistry.sendEvent(nodeId, event, payload));
+  registerAcpNodeChecker((nodeId) => nodeRegistry.get(nodeId) !== undefined);
+  registerAcpNodeListProvider(() =>
+    nodeRegistry
+      .listConnected()
+      .filter((node) => node.caps.includes("acp"))
+      .map((node) => ({ nodeId: node.nodeId, displayName: node.displayName })),
+  );
   applyGatewayLaneConcurrency(cfgAtStart);
 
   runtimeState = createGatewayServerLiveState({

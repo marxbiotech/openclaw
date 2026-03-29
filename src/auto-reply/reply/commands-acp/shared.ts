@@ -300,7 +300,24 @@ export function parseSpawnInput(
       error: `ACP target harness id is required. Pass an ACP harness id (for example codex) or configure acp.defaultAgent. ${ACP_SPAWN_USAGE}`,
     };
   }
-  const normalizedAgentId = normalizeAgentId(selectedAgent);
+  // Resolve agents.list entry: if selectedAgent matches an agents.list id with
+  // runtime.type === "acp", use its runtime.acp.agent as harness-id and
+  // runtime.acp.cwd as default cwd (user --cwd flag takes precedence).
+  let resolvedAgent = selectedAgent;
+  let resolvedCwd = cwd;
+  const agentsList = params.cfg.agents?.list;
+  if (Array.isArray(agentsList)) {
+    const entry = agentsList.find(
+      (a) => a.id?.toLowerCase() === selectedAgent.toLowerCase() && a.runtime?.type === "acp",
+    );
+    if (entry?.runtime?.type === "acp") {
+      resolvedAgent = entry.runtime.acp?.agent?.trim() || selectedAgent;
+      if (!resolvedCwd && entry.runtime.acp?.cwd) {
+        resolvedCwd = entry.runtime.acp.cwd;
+      }
+    }
+  }
+  const normalizedAgentId = normalizeAgentId(resolvedAgent);
   if (bind !== "off" && !sawThreadOption) {
     thread = "off";
   }
@@ -318,8 +335,8 @@ export function parseSpawnInput(
       mode,
       thread,
       bind,
-      cwd,
-      label,
+      cwd: resolvedCwd,
+      label: label || (selectedAgent !== resolvedAgent ? selectedAgent : undefined),
     },
   };
 }
@@ -454,7 +471,7 @@ export function resolveAcpHelpText(): string {
     "/acp sessions",
     "",
     "Notes:",
-    "- /acp spawn harness-id is an ACP runtime harness alias (for example codex), not an OpenClaw agents.list id.",
+    "- /acp spawn accepts a harness-id (e.g. codex) or an agents.list id with runtime.type=acp (resolves harness + cwd).",
     "- Use --bind here to pin the current conversation to the ACP session without creating a child thread.",
     "- /focus and /unfocus also work with ACP session keys.",
     "- ACP dispatch of normal thread messages is controlled by acp.dispatch.enabled.",

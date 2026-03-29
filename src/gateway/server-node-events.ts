@@ -12,6 +12,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
+import { getAcpNodeEventHandler } from "./acp-node-event-bridge.js";
 import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
 import {
   agentCommandFromIngress,
@@ -754,6 +755,17 @@ export const handleNodeEvent = async (
         );
       }
       return undefined;
+    }
+    case "acp.spawned":
+    case "acp.message":
+    case "acp.exited":
+    case "acp.error": {
+      const payload = parsePayloadObject(evt.payloadJSON);
+      if (!payload) {
+        return;
+      }
+      getAcpNodeEventHandler()?.(nodeId, { event: evt.event, payload });
+      return;
     }
     case "push.apns.register": {
       const obj = parsePayloadObject(evt.payloadJSON);

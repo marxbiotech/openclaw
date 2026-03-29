@@ -105,6 +105,8 @@
   "acp-runtime-backend",
   "acp-binding-runtime",
   "acp-binding-resolve-runtime",
+  "acpx",
+  "remote-acpx",
   "lazy-runtime",
   "agent-runtime-test-contracts",
   "channel-target-testing",
