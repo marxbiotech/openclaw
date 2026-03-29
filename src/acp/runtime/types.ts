@@ -38,6 +38,8 @@ export type AcpRuntimeEnsureInput = {
   resumeSessionId?: string;
   cwd?: string;
   env?: Record<string, string>;
+  /** Display name of the target node for remote dispatch (resolved by the backend). */
+  nodeName?: string;
 };
 
 export type AcpRuntimeTurnAttachment = {
