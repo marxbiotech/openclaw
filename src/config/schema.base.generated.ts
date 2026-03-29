@@ -4824,6 +4824,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                             cwd: {
                               type: "string",
                             },
+                            nodeName: {
+                              type: "string",
+                              minLength: 1,
+                            },
                           },
                           additionalProperties: false,
                         },

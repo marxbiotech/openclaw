@@ -1195,6 +1195,7 @@ export function buildGatewaySessionRow(params: {
     key,
     spawnedBy: subagentOwner || entry?.spawnedBy,
     spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,
+    acpCwd: entry?.acp?.cwd,
     forkedFromParent: entry?.forkedFromParent,
     spawnDepth: entry?.spawnDepth,
     subagentRole: entry?.subagentRole,
@@ -1280,6 +1281,7 @@ export function listSessionsFromStore(params: {
   const label = typeof opts.label === "string" ? opts.label.trim() : "";
   const agentId = typeof opts.agentId === "string" ? normalizeAgentId(opts.agentId) : "";
   const search = typeof opts.search === "string" ? opts.search.trim().toLowerCase() : "";
+  const cwdFilter = typeof opts.cwd === "string" ? opts.cwd.trim().toLowerCase() : "";
   const activeMinutes =
     typeof opts.activeMinutes === "number" && Number.isFinite(opts.activeMinutes)
       ? Math.max(1, Math.floor(opts.activeMinutes))
@@ -1345,8 +1347,15 @@ export function listSessionsFromStore(params: {
 
   if (search) {
     sessions = sessions.filter((s) => {
-      const fields = [s.displayName, s.label, s.subject, s.sessionId, s.key];
+      const fields = [s.displayName, s.label, s.subject, s.sessionId, s.key, s.acpCwd];
       return fields.some((f) => typeof f === "string" && f.toLowerCase().includes(search));
+    });
+  }
+
+  if (cwdFilter) {
+    sessions = sessions.filter((s) => {
+      const entryCwd = s.acpCwd;
+      return typeof entryCwd === "string" && entryCwd.toLowerCase().includes(cwdFilter);
     });
   }
 

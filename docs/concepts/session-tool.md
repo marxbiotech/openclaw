@@ -36,6 +36,8 @@ Parameters:
 - `limit?: number` max rows (default: server default, clamp e.g. 200)
 - `activeMinutes?: number` only sessions updated within N minutes
 - `messageLimit?: number` 0 = no messages (default 0); >0 = include last N messages
+- `search?: string` free-text filter (case-insensitive substring match across display name, label, subject, session id, key, and ACP cwd)
+- `cwd?: string` filter by ACP session working directory (case-insensitive substring match)
 
 Behavior:
 

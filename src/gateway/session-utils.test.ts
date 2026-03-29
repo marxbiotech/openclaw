@@ -885,6 +885,130 @@ describe("listSessionsFromStore search", () => {
     }
   });
 
+  test("filters sessions by cwd (case-insensitive substring)", () => {
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      "agent:main:acp:a": {
+        sessionId: "sess-a",
+        updatedAt: now,
+        displayName: "Codex A",
+        acp: {
+          backend: "acpx",
+          agent: "codex",
+          runtimeSessionName: "a",
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: now,
+          cwd: "/workspace/openclaw",
+        },
+      } as SessionEntry,
+      "agent:main:acp:b": {
+        sessionId: "sess-b",
+        updatedAt: now - 1000,
+        displayName: "Codex B",
+        acp: {
+          backend: "acpx",
+          agent: "codex",
+          runtimeSessionName: "b",
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: now,
+          cwd: "/workspace/other-repo",
+        },
+      } as SessionEntry,
+      "agent:main:plain": {
+        sessionId: "sess-c",
+        updatedAt: now - 2000,
+        displayName: "No ACP",
+      } as SessionEntry,
+    };
+
+    // cwd filter matches only the openclaw session
+    const result1 = listSessionsFromStore({
+      cfg: baseCfg,
+      storePath: "/tmp/s.json",
+      store,
+      opts: { cwd: "openclaw" },
+    });
+    expect(result1.sessions).toHaveLength(1);
+    expect(result1.sessions[0].key).toBe("agent:main:acp:a");
+
+    // cwd filter is case-insensitive
+    const result2 = listSessionsFromStore({
+      cfg: baseCfg,
+      storePath: "/tmp/s.json",
+      store,
+      opts: { cwd: "OTHER-REPO" },
+    });
+    expect(result2.sessions).toHaveLength(1);
+    expect(result2.sessions[0].key).toBe("agent:main:acp:b");
+
+    // cwd filter excludes sessions without acp metadata
+    const result3 = listSessionsFromStore({
+      cfg: baseCfg,
+      storePath: "/tmp/s.json",
+      store,
+      opts: { cwd: "/workspace" },
+    });
+    expect(result3.sessions).toHaveLength(2);
+    expect(result3.sessions.map((s) => s.key).toSorted()).toEqual([
+      "agent:main:acp:a",
+      "agent:main:acp:b",
+    ]);
+
+    // empty cwd filter returns all sessions
+    const result4 = listSessionsFromStore({
+      cfg: baseCfg,
+      storePath: "/tmp/s.json",
+      store,
+      opts: { cwd: "" },
+    });
+    expect(result4.sessions).toHaveLength(3);
+
+    // nonexistent cwd returns empty
+    const result5 = listSessionsFromStore({
+      cfg: baseCfg,
+      storePath: "/tmp/s.json",
+      store,
+      opts: { cwd: "nonexistent" },
+    });
+    expect(result5.sessions).toHaveLength(0);
+  });
+
+  test("search parameter matches against acp cwd field", () => {
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      "agent:main:acp:x": {
+        sessionId: "sess-x",
+        updatedAt: now,
+        displayName: "Agent X",
+        acp: {
+          backend: "acpx",
+          agent: "codex",
+          runtimeSessionName: "x",
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: now,
+          cwd: "/home/user/my-unique-project",
+        },
+      } as SessionEntry,
+      "agent:main:other": {
+        sessionId: "sess-y",
+        updatedAt: now,
+        displayName: "Agent Y",
+      } as SessionEntry,
+    };
+
+    const result = listSessionsFromStore({
+      cfg: baseCfg,
+      storePath: "/tmp/s.json",
+      store,
+      opts: { search: "my-unique-project" },
+    });
+    expect(result.sessions).toHaveLength(1);
+    expect(result.sessions[0].key).toBe("agent:main:acp:x");
+  });
+
   test("hides cron run alias session keys from sessions list", () => {
     const now = Date.now();
     const store: Record<string, SessionEntry> = {

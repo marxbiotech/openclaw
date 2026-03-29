@@ -46,6 +46,7 @@ export type AcpInitializeSessionInput = {
   resumeSessionId?: string;
   cwd?: string;
   backendId?: string;
+  nodeName?: string;
 };
 
 export type AcpTurnAttachment = {
