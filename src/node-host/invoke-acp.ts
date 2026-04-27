@@ -8,6 +8,35 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { createInterface, type Interface as ReadlineInterface } from "node:readline";
 import type { GatewayClient } from "../gateway/client.js";
 import { resolveExecutableFromPathEnv } from "../infra/executable-path.js";
+import {
+  resolveWindowsSpawnProgram,
+  materializeWindowsSpawnProgram,
+} from "../plugin-sdk/windows-spawn.js";
+
+type WindowsSpawnResult = {
+  command: string;
+  argv: string[];
+  shell?: boolean;
+  windowsHide?: boolean;
+};
+
+/** Resolve command + args through the Windows spawn pipeline so .cmd wrappers are handled. */
+export function resolveAcpNodeSpawnInvocation(command: string, args: string[]): WindowsSpawnResult {
+  const program = resolveWindowsSpawnProgram({
+    command,
+    platform: process.platform,
+    env: process.env,
+    execPath: process.execPath,
+    allowShellFallback: true,
+  });
+  const invocation = materializeWindowsSpawnProgram(program, args);
+  return {
+    command: invocation.command,
+    argv: invocation.argv,
+    shell: invocation.shell,
+    windowsHide: invocation.windowsHide,
+  };
+}
 
 type ActiveTurn = {
   process: ChildProcess;
@@ -83,10 +112,19 @@ async function handleSpawn(payload: Record<string, unknown>, client: GatewayClie
   // Ensure acpx session exists for this cwd (acpx 0.1.16+ requires it)
   try {
     const { execFileSync } = await import("node:child_process");
-    execFileSync(agentCommand, [agent, "sessions", "new", "--name", acpSessionId], {
+    const sessionInvocation = resolveAcpNodeSpawnInvocation(agentCommand, [
+      agent,
+      "sessions",
+      "new",
+      "--name",
+      acpSessionId,
+    ]);
+    execFileSync(sessionInvocation.command, sessionInvocation.argv, {
       cwd,
       timeout: 10_000,
       stdio: ["ignore", "ignore", "pipe"],
+      shell: sessionInvocation.shell,
+      windowsHide: sessionInvocation.windowsHide,
     });
   } catch {
     // Session may already exist or sessions new may not be supported — continue anyway
@@ -151,10 +189,13 @@ async function handleTurn(payload: Record<string, unknown>, client: GatewayClien
 
   let child: ChildProcess;
   try {
-    child = spawn(agentCommand, args, {
+    const turnInvocation = resolveAcpNodeSpawnInvocation(agentCommand, args);
+    child = spawn(turnInvocation.command, turnInvocation.argv, {
       cwd,
       stdio: ["pipe", "pipe", "pipe"],
       env: { ...process.env },
+      shell: turnInvocation.shell,
+      windowsHide: turnInvocation.windowsHide,
     });
   } catch (err) {
     await sendNodeEvent(client, "acp.error", {
