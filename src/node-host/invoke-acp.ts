@@ -124,18 +124,31 @@ async function handleSpawn(payload: Record<string, unknown>, client: GatewayClie
     acpSessionId,
   ]);
 
-  // Ensure acpx session exists for this cwd (acpx 0.1.16+ requires it)
+  // Create acpx session for this cwd (acpx 0.1.16+ requires it).
+  // Failures must be surfaced — a silent swallow here causes the subsequent
+  // acp.turn to fail with a misleading "No acpx session found" error.
   try {
     const { execFileSync } = await import("node:child_process");
     execFileSync(sessionInvocation.command, sessionInvocation.argv, {
       cwd,
-      timeout: 10_000,
-      stdio: ["ignore", "ignore", "pipe"],
+      timeout: 30_000,
+      stdio: ["ignore", "pipe", "pipe"],
       shell: sessionInvocation.shell,
       windowsHide: sessionInvocation.windowsHide,
     });
-  } catch {
-    // Session may already exist or sessions new may not be supported — continue anyway
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    const stderr =
+      err != null && typeof (err as Record<string, unknown>).stderr !== "undefined"
+        ? String((err as Record<string, unknown>).stderr)
+            .trim()
+            .slice(0, 500)
+        : "";
+    await sendNodeEvent(client, "acp.error", {
+      acpSessionId,
+      error: `sessions new failed: ${message}${stderr ? ` | stderr: ${stderr}` : ""}`,
+    });
+    return;
   }
 
   await sendNodeEvent(client, "acp.spawned", {
