@@ -154,6 +154,7 @@ describe("handleAcpEvent — acp.spawn", () => {
       expect(events[0].event).toBe("acp.error");
       expect(events[0].payload.acpSessionId).toBe("racp-test-fail");
       expect(events[0].payload.error).toContain("sessions new failed");
+      expect(events[0].payload.error).toContain("session init error");
     } finally {
       process.env.PATH = originalPath;
     }

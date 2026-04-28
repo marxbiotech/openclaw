@@ -1,6 +1,6 @@
 // Node-host ACP command handler. Manages acpx subprocess lifecycle per turn.
 // Three event types:
-//   acp.spawn  — validate agent binary, confirm readiness
+//   acp.spawn  — validate agent binary, create acpx session, confirm readiness
 //   acp.turn   — spawn acpx process, stream ndjson lines back as events
 //   acp.kill   — kill active acpx process for a session
 
@@ -138,11 +138,11 @@ async function handleSpawn(payload: Record<string, unknown>, client: GatewayClie
     });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
+    const rec = asRecord(err);
+    const rawStderr = rec?.stderr;
     const stderr =
-      err != null && typeof (err as Record<string, unknown>).stderr !== "undefined"
-        ? String((err as Record<string, unknown>).stderr)
-            .trim()
-            .slice(0, 500)
+      typeof rawStderr === "string" || Buffer.isBuffer(rawStderr)
+        ? String(rawStderr).trim().slice(0, 500)
         : "";
     await sendNodeEvent(client, "acp.error", {
       acpSessionId,
