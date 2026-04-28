@@ -1,4 +1,4 @@
-// Mac-side ACP command handler. Manages acpx subprocess lifecycle per turn.
+// Node-host ACP command handler. Manages acpx subprocess lifecycle per turn.
 // Three event types:
 //   acp.spawn  — validate agent binary, confirm readiness
 //   acp.turn   — spawn acpx process, stream ndjson lines back as events
@@ -8,6 +8,39 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { createInterface, type Interface as ReadlineInterface } from "node:readline";
 import type { GatewayClient } from "../gateway/client.js";
 import { resolveExecutableFromPathEnv } from "../infra/executable-path.js";
+import {
+  type WindowsSpawnInvocation,
+  resolveWindowsSpawnProgram,
+  materializeWindowsSpawnProgram,
+} from "../plugin-sdk/windows-spawn.js";
+
+export type AcpNodeSpawnRuntime = {
+  platform: NodeJS.Platform;
+  env: NodeJS.ProcessEnv;
+  execPath: string;
+};
+
+const DEFAULT_ACP_NODE_SPAWN_RUNTIME: AcpNodeSpawnRuntime = {
+  platform: process.platform,
+  env: process.env,
+  execPath: process.execPath,
+};
+
+/** Resolve command + args through the Windows spawn pipeline so .cmd wrappers are handled. */
+export function resolveAcpNodeSpawnInvocation(
+  command: string,
+  args: string[],
+  runtime: AcpNodeSpawnRuntime = DEFAULT_ACP_NODE_SPAWN_RUNTIME,
+): WindowsSpawnInvocation {
+  const program = resolveWindowsSpawnProgram({
+    command,
+    platform: runtime.platform,
+    env: runtime.env,
+    execPath: runtime.execPath,
+    allowShellFallback: true,
+  });
+  return materializeWindowsSpawnProgram(program, args);
+}
 
 type ActiveTurn = {
   process: ChildProcess;
@@ -80,13 +113,26 @@ async function handleSpawn(payload: Record<string, unknown>, client: GatewayClie
     return;
   }
 
+  // Resolve spawn invocation outside the session-creation try/catch so that
+  // resolution errors (filesystem I/O, .cmd parsing) are not silently swallowed
+  // as "session may already exist."
+  const sessionInvocation = resolveAcpNodeSpawnInvocation(resolved, [
+    agent,
+    "sessions",
+    "new",
+    "--name",
+    acpSessionId,
+  ]);
+
   // Ensure acpx session exists for this cwd (acpx 0.1.16+ requires it)
   try {
     const { execFileSync } = await import("node:child_process");
-    execFileSync(agentCommand, [agent, "sessions", "new", "--name", acpSessionId], {
+    execFileSync(sessionInvocation.command, sessionInvocation.argv, {
       cwd,
       timeout: 10_000,
       stdio: ["ignore", "ignore", "pipe"],
+      shell: sessionInvocation.shell,
+      windowsHide: sessionInvocation.windowsHide,
     });
   } catch {
     // Session may already exist or sessions new may not be supported — continue anyway
@@ -149,12 +195,21 @@ async function handleTurn(payload: Record<string, unknown>, client: GatewayClien
     "-",
   ];
 
+  // When shell fallback is active (shell: true on Windows), cmd.exe spawns
+  // successfully even if the inner command fails. Errors surface as non-zero
+  // exit codes + stderr rather than the 'error' event. The exit handler below
+  // accounts for this by emitting acp.error for non-zero shell-mode exits.
   let child: ChildProcess;
+  let usedShell = false;
   try {
-    child = spawn(agentCommand, args, {
+    const turnInvocation = resolveAcpNodeSpawnInvocation(agentCommand, args);
+    usedShell = turnInvocation.shell === true;
+    child = spawn(turnInvocation.command, turnInvocation.argv, {
       cwd,
       stdio: ["pipe", "pipe", "pipe"],
       env: { ...process.env },
+      shell: turnInvocation.shell,
+      windowsHide: turnInvocation.windowsHide,
     });
   } catch (err) {
     await sendNodeEvent(client, "acp.error", {
@@ -193,6 +248,16 @@ async function handleTurn(payload: Record<string, unknown>, client: GatewayClien
   child.on("exit", (exitCode: number | null) => {
     readline.close();
     activeTurns.delete(acpSessionId);
+
+    // In shell fallback mode, command failures appear as non-zero exits rather
+    // than 'error' events. Surface them as acp.error so downstream consumers
+    // see a consistent error channel regardless of spawn mode.
+    if (usedShell && exitCode && exitCode !== 0 && stderr.trim()) {
+      void sendNodeEvent(client, "acp.error", {
+        acpSessionId,
+        error: `${agentCommand} exited with code ${exitCode} (shell mode): ${stderr.trim().slice(0, 500)}`,
+      });
+    }
 
     void sendNodeEvent(client, "acp.exited", {
       acpSessionId,
