@@ -1,8 +1,9 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { chmod, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { GatewayClient } from "../gateway/client.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
-import { resolveAcpNodeSpawnInvocation } from "./invoke-acp.js";
+import { handleAcpEvent, resolveAcpNodeSpawnInvocation } from "./invoke-acp.js";
 
 const tempDirs = createTrackedTempDirs();
 const createTempDir = () => tempDirs.make("invoke-acp-test-");
@@ -10,6 +11,27 @@ const createTempDir = () => tempDirs.make("invoke-acp-test-");
 afterEach(async () => {
   await tempDirs.cleanup();
 });
+
+type CapturedEvent = { event: string; payload: Record<string, unknown> };
+
+function createMockClient(): { client: GatewayClient; events: CapturedEvent[] } {
+  const events: CapturedEvent[] = [];
+  const client = {
+    request: vi.fn(async (_method: string, params: Record<string, unknown>) => {
+      const event = typeof params.event === "string" ? params.event : "";
+      const payloadJSON = typeof params.payloadJSON === "string" ? params.payloadJSON : "{}";
+      events.push({ event, payload: JSON.parse(payloadJSON) as Record<string, unknown> });
+    }),
+  } as unknown as GatewayClient;
+  return { client, events };
+}
+
+/** Wait for handleAcpEvent's fire-and-forget promise to settle. */
+async function flush(): Promise<void> {
+  // handleAcpEvent uses `void handleSpawn(...)` (fire-and-forget).
+  // Flush the microtask queue so the async function completes.
+  await new Promise((r) => setTimeout(r, 50));
+}
 
 describe("resolveAcpNodeSpawnInvocation", () => {
   it("passes through command and args on non-windows platforms", () => {
@@ -66,5 +88,128 @@ describe("resolveAcpNodeSpawnInvocation", () => {
     expect(result.command).toBe(shimPath);
     expect(result.argv).toEqual(["claude", "prompt"]);
     expect(result.shell).toBe(true);
+  });
+});
+
+describe("handleAcpEvent — acp.spawn", () => {
+  it("sends acp.spawned when session creation succeeds", async () => {
+    const dir = await createTempDir();
+    const scriptPath = path.join(dir, "fake-acpx");
+    // Script that exits 0 (success)
+    await writeFile(scriptPath, "#!/bin/sh\nexit 0\n", "utf8");
+    await chmod(scriptPath, 0o755);
+
+    const originalPath = process.env.PATH;
+    process.env.PATH = `${dir}${path.delimiter}${originalPath}`;
+    try {
+      const { client, events } = createMockClient();
+      handleAcpEvent(
+        {
+          event: "acp.spawn",
+          payload: {
+            acpSessionId: "racp-test-ok",
+            agentCommand: "fake-acpx",
+            agent: "claude",
+            cwd: dir,
+          },
+        },
+        client,
+      );
+      await flush();
+
+      expect(events).toHaveLength(1);
+      expect(events[0].event).toBe("acp.spawned");
+      expect(events[0].payload.acpSessionId).toBe("racp-test-ok");
+    } finally {
+      process.env.PATH = originalPath;
+    }
+  });
+
+  it("sends acp.error when session creation command fails", async () => {
+    const dir = await createTempDir();
+    const scriptPath = path.join(dir, "fail-acpx");
+    // Script that writes to stderr and exits non-zero
+    await writeFile(scriptPath, '#!/bin/sh\necho "session init error" >&2\nexit 1\n', "utf8");
+    await chmod(scriptPath, 0o755);
+
+    const originalPath = process.env.PATH;
+    process.env.PATH = `${dir}${path.delimiter}${originalPath}`;
+    try {
+      const { client, events } = createMockClient();
+      handleAcpEvent(
+        {
+          event: "acp.spawn",
+          payload: {
+            acpSessionId: "racp-test-fail",
+            agentCommand: "fail-acpx",
+            agent: "claude",
+            cwd: dir,
+          },
+        },
+        client,
+      );
+      await flush();
+
+      expect(events).toHaveLength(1);
+      expect(events[0].event).toBe("acp.error");
+      expect(events[0].payload.acpSessionId).toBe("racp-test-fail");
+      expect(events[0].payload.error).toContain("sessions new failed");
+      expect(events[0].payload.error).toContain("session init error");
+    } finally {
+      process.env.PATH = originalPath;
+    }
+  });
+
+  it("sends acp.error when agent command is not found in PATH", async () => {
+    const { client, events } = createMockClient();
+    handleAcpEvent(
+      {
+        event: "acp.spawn",
+        payload: {
+          acpSessionId: "racp-test-notfound",
+          agentCommand: "nonexistent-acpx-binary-xyz",
+          agent: "claude",
+          cwd: "/tmp",
+        },
+      },
+      client,
+    );
+    await flush();
+
+    expect(events).toHaveLength(1);
+    expect(events[0].event).toBe("acp.error");
+    expect(events[0].payload.acpSessionId).toBe("racp-test-notfound");
+    expect(events[0].payload.error).toContain("Agent command not found");
+  });
+
+  it("does not send acp.spawned when session creation fails", async () => {
+    const dir = await createTempDir();
+    const scriptPath = path.join(dir, "bad-acpx");
+    await writeFile(scriptPath, "#!/bin/sh\nexit 2\n", "utf8");
+    await chmod(scriptPath, 0o755);
+
+    const originalPath = process.env.PATH;
+    process.env.PATH = `${dir}${path.delimiter}${originalPath}`;
+    try {
+      const { client, events } = createMockClient();
+      handleAcpEvent(
+        {
+          event: "acp.spawn",
+          payload: {
+            acpSessionId: "racp-test-no-spawned",
+            agentCommand: "bad-acpx",
+            agent: "claude",
+            cwd: dir,
+          },
+        },
+        client,
+      );
+      await flush();
+
+      const spawnedEvents = events.filter((e) => e.event === "acp.spawned");
+      expect(spawnedEvents).toHaveLength(0);
+    } finally {
+      process.env.PATH = originalPath;
+    }
   });
 });
