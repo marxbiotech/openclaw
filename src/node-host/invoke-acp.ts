@@ -1,6 +1,6 @@
 // Node-host ACP command handler. Manages acpx subprocess lifecycle per turn.
 // Three event types:
-//   acp.spawn  — validate agent binary, confirm readiness
+//   acp.spawn  — validate agent binary, create acpx session, confirm readiness
 //   acp.turn   — spawn acpx process, stream ndjson lines back as events
 //   acp.kill   — kill active acpx process for a session
 
@@ -124,18 +124,31 @@ async function handleSpawn(payload: Record<string, unknown>, client: GatewayClie
     acpSessionId,
   ]);
 
-  // Ensure acpx session exists for this cwd (acpx 0.1.16+ requires it)
+  // Create acpx session for this cwd (acpx 0.1.16+ requires it).
+  // Failures must be surfaced — a silent swallow here causes the subsequent
+  // acp.turn to fail with a misleading "No acpx session found" error.
   try {
     const { execFileSync } = await import("node:child_process");
     execFileSync(sessionInvocation.command, sessionInvocation.argv, {
       cwd,
-      timeout: 10_000,
-      stdio: ["ignore", "ignore", "pipe"],
+      timeout: 30_000,
+      stdio: ["ignore", "pipe", "pipe"],
       shell: sessionInvocation.shell,
       windowsHide: sessionInvocation.windowsHide,
     });
-  } catch {
-    // Session may already exist or sessions new may not be supported — continue anyway
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    const rec = asRecord(err);
+    const rawStderr = rec?.stderr;
+    const stderr =
+      typeof rawStderr === "string" || Buffer.isBuffer(rawStderr)
+        ? String(rawStderr).trim().slice(0, 500)
+        : "";
+    await sendNodeEvent(client, "acp.error", {
+      acpSessionId,
+      error: `sessions new failed: ${message}${stderr ? ` | stderr: ${stderr}` : ""}`,
+    });
+    return;
   }
 
   await sendNodeEvent(client, "acp.spawned", {
