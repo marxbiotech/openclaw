@@ -5,6 +5,7 @@ export const pluginSdkEntrypoints = [...pluginSdkEntryList];
 export const pluginSdkSubpaths = pluginSdkEntrypoints.filter((entry) => entry !== "index");
 
 export const reservedBundledPluginSdkEntrypoints = [
+  "acpx",
   "bluebubbles",
   "bluebubbles-policy",
   "browser-cdp",
