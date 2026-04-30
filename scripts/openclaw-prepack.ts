@@ -5,6 +5,8 @@ import { existsSync, readdirSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "../src/infra/errors.ts";
 import { writePackageDistInventory } from "../src/infra/package-dist-inventory.ts";
+
+const skipPrepackPreparedEnv = "OPENCLAW_PREPACK_PREPARED";
 const requiredPreparedPathGroups = [
   ["dist/index.js", "dist/index.mjs"],
   ["dist/control-ui/index.html"],
@@ -15,6 +17,14 @@ type PreparedFileReader = {
   existsSync: typeof existsSync;
   readdirSync: typeof readdirSync;
 };
+
+export function shouldSkipPrepack(env = process.env): boolean {
+  const raw = env[skipPrepackPreparedEnv];
+  if (!raw) {
+    return false;
+  }
+  return !/^(0|false)$/i.test(raw);
+}
 
 function normalizeFiles(files: Iterable<string>): Set<string> {
   return new Set(Array.from(files, (file) => file.replace(/\\/g, "/")));
@@ -111,8 +121,12 @@ async function writeDistInventory(): Promise<void> {
 
 async function main(): Promise<void> {
   const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
-  run(pnpmCommand, ["build"]);
-  run(pnpmCommand, ["ui:build"]);
+  if (shouldSkipPrepack()) {
+    console.error(`prepack: ${skipPrepackPreparedEnv}=1; skipping rebuild.`);
+  } else {
+    run(pnpmCommand, ["build"]);
+    run(pnpmCommand, ["ui:build"]);
+  }
   ensurePreparedArtifacts();
   await writeDistInventory();
   runBuildSmoke();
