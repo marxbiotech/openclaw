@@ -500,7 +500,6 @@ describe("plugin-sdk subpath exports", () => {
 
   it("keeps the curated public list free of internal implementation subpaths", () => {
     for (const deniedSubpath of [
-      "acpx",
       "device-pair",
       "lobster",
       "pairing-access",

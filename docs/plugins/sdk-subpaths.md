@@ -300,6 +300,7 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/persistent-dedupe` | Disk-backed dedupe cache helpers |
     | `plugin-sdk/acp-runtime` | ACP runtime/session and reply-dispatch helpers |
     | `plugin-sdk/acp-runtime-backend` | Lightweight ACP backend registration and reply-dispatch helpers for startup-loaded plugins |
+    | `plugin-sdk/acpx` | Reserved remote-acpx ACP runtime backend for node dispatch |
     | `plugin-sdk/acp-binding-resolve-runtime` | Read-only ACP binding resolution without lifecycle startup imports |
     | `plugin-sdk/agent-config-primitives` | Deprecated agent runtime config-schema primitives; import schema primitives from a maintained plugin-owned surface |
     | `plugin-sdk/boolean-param` | Loose boolean param reader |
