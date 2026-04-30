@@ -11,6 +11,7 @@ import {
 const handleFeishuCommentEventMock = vi.hoisted(() => vi.fn(async () => {}));
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
 
+// oxlint-disable-next-line typescript/no-redundant-type-constituents -- OutputRuntimeEnv resolves as error type in extension oxlint shard
 let lastRuntime: ReturnType<typeof createNonExitingRuntimeEnv> | null = null;
 const TEST_DOC_TOKEN = "ZsJfdxrBFo0RwuxteOLc1Ekvneb";
 const TEST_WIKI_TOKEN = "OtYpd5pKOoMeQzxrzkocv9KIn4H";
