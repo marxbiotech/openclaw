@@ -216,6 +216,7 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
     | `plugin-sdk/persistent-dedupe` | Disk-backed dedupe cache helpers |
     | `plugin-sdk/acp-runtime` | ACP runtime/session and reply-dispatch helpers |
     | `plugin-sdk/acp-runtime-backend` | Lightweight ACP backend registration and reply-dispatch helpers for startup-loaded plugins |
+    | `plugin-sdk/acpx` | Reserved remote-acpx ACP runtime backend for node dispatch |
     | `plugin-sdk/acp-binding-resolve-runtime` | Read-only ACP binding resolution without lifecycle startup imports |
     | `plugin-sdk/agent-config-primitives` | Narrow agent runtime config-schema primitives |
     | `plugin-sdk/boolean-param` | Loose boolean param reader |
