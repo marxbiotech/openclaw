@@ -699,6 +699,40 @@ canonical replacement.
     ```
 
   </Accordion>
+
+  <Accordion title="@sinclair/typebox → typebox">
+    The TypeBox package was renamed and republished as `typebox` (1.x).
+    OpenClaw and every bundled plugin track `typebox` 1.1.33 directly.
+    Plugins that still import `@sinclair/typebox` will fail to load against
+    the new ecosystem because the host node_modules no longer carries that
+    package name.
+
+    ```typescript
+    // Before
+    import { Type } from "@sinclair/typebox";
+
+    // After
+    import { Type } from "typebox";
+    ```
+
+    Update both your imports and the package dependency:
+
+    ```jsonc
+    // package.json
+    {
+      "dependencies": {
+        "typebox": "1.1.33"
+      }
+    }
+    ```
+
+    The 1.x release reorganized subpath exports (`typebox/type`,
+    `typebox/value`, `typebox/compile`, `typebox/schema`, etc.). If your
+    plugin imported from `@sinclair/typebox/value` or
+    `@sinclair/typebox/compile`, recheck the new subpath surface before
+    porting — the entry points moved, not just the package name.
+
+  </Accordion>
 </AccordionGroup>
 
 <Note>

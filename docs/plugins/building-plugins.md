@@ -95,7 +95,7 @@ and provider plugins have dedicated guides linked above.
     ```typescript
     // index.ts
     import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-    import { Type } from "@sinclair/typebox";
+    import { Type } from "typebox";
 
     export default definePluginEntry({
       id: "my-plugin",
