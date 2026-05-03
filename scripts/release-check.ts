@@ -904,10 +904,9 @@ function runCriticalPluginSdkEntrypointImportSmoke() {
   const specifiers = CRITICAL_PLUGIN_SDK_IMPORT_SMOKE_SPECIFIERS.map((specifier) =>
     specifier.replace(/^openclaw\//, `${packageName}/`),
   );
-  const importerFactory = `new Function(\"specifier\", \"return imp\" + \"ort(specifier)\")`;
   const script = [
     `const specifiers = ${JSON.stringify(specifiers)};`,
-    `const importModule = ${importerFactory};`,
+    `const importModule = new Function("specifier", "return imp" + "ort(specifier)");`,
     "for (const specifier of specifiers) {",
     "  await importModule(specifier);",
     "}",
