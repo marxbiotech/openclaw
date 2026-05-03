@@ -900,9 +900,14 @@ export function collectCriticalPluginSdkEntrypointSizeErrors(rootDir = process.c
 }
 
 function runCriticalPluginSdkEntrypointImportSmoke() {
+  const packageName = JSON.parse(readFileSync(resolve("package.json"), "utf8")).name as string;
+  const specifiers = CRITICAL_PLUGIN_SDK_IMPORT_SMOKE_SPECIFIERS.map((specifier) =>
+    specifier.replace(/^openclaw\//, `${packageName}/`),
+  );
+  const importerFactory = `new Function(\"specifier\", \"return imp\" + \"ort(specifier)\")`;
   const script = [
-    `const specifiers = ${JSON.stringify(CRITICAL_PLUGIN_SDK_IMPORT_SMOKE_SPECIFIERS)};`,
-    `const importModule = new Function("specifier", "return imp" + "ort(specifier)");`,
+    `const specifiers = ${JSON.stringify(specifiers)};`,
+    `const importModule = ${importerFactory};`,
     "for (const specifier of specifiers) {",
     "  await importModule(specifier);",
     "}",
