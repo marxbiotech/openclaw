@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - "v*"
+      - "mb*"
     paths-ignore:
       - "docs/**"
       - "**/*.md"
@@ -13,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing release tag to backfill (for example v2026.3.22)
+        description: Existing release tag to backfill (for example v2026.4.26 or mb2026.4.26-beta.1)
         required: true
         type: string
 
@@ -38,7 +39,7 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-beta\.[1-9][0-9]*)?$ ]]; then
+          if [[ ! "${RELEASE_TAG}" =~ ^(v|mb)[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-beta\.[1-9][0-9]*)?$ ]]; then
             echo "Invalid release tag: ${RELEASE_TAG}"
             exit 1
           fi
@@ -106,8 +107,8 @@ jobs:
             tags+=("${IMAGE}:main-amd64")
             slim_tags+=("${IMAGE}:main-slim-amd64")
           fi
-          if [[ "${SOURCE_REF}" == refs/tags/v* ]]; then
-            version="${SOURCE_REF#refs/tags/v}"
+          if [[ "${SOURCE_REF}" == refs/tags/v* || "${SOURCE_REF}" == refs/tags/mb* ]]; then
+            version="${SOURCE_REF#refs/tags/}" && version="${version#v}" && version="${version#mb}"
             tags+=("${IMAGE}:${version}-amd64")
             slim_tags+=("${IMAGE}:${version}-slim-amd64")
           fi
@@ -133,8 +134,8 @@ jobs:
           if [[ "${SOURCE_REF}" == "refs/heads/main" ]]; then
             version="main"
           fi
-          if [[ "${SOURCE_REF}" == refs/tags/v* ]]; then
-            version="${SOURCE_REF#refs/tags/v}"
+          if [[ "${SOURCE_REF}" == refs/tags/v* || "${SOURCE_REF}" == refs/tags/mb* ]]; then
+            version="${SOURCE_REF#refs/tags/}" && version="${version#v}" && version="${version#mb}"
           fi
           created="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           {
@@ -204,8 +205,8 @@ jobs:
             tags+=("${IMAGE}:main-arm64")
             slim_tags+=("${IMAGE}:main-slim-arm64")
           fi
-          if [[ "${SOURCE_REF}" == refs/tags/v* ]]; then
-            version="${SOURCE_REF#refs/tags/v}"
+          if [[ "${SOURCE_REF}" == refs/tags/v* || "${SOURCE_REF}" == refs/tags/mb* ]]; then
+            version="${SOURCE_REF#refs/tags/}" && version="${version#v}" && version="${version#mb}"
             tags+=("${IMAGE}:${version}-arm64")
             slim_tags+=("${IMAGE}:${version}-slim-arm64")
           fi
@@ -231,8 +232,8 @@ jobs:
           if [[ "${SOURCE_REF}" == "refs/heads/main" ]]; then
             version="main"
           fi
-          if [[ "${SOURCE_REF}" == refs/tags/v* ]]; then
-            version="${SOURCE_REF#refs/tags/v}"
+          if [[ "${SOURCE_REF}" == refs/tags/v* || "${SOURCE_REF}" == refs/tags/mb* ]]; then
+            version="${SOURCE_REF#refs/tags/}" && version="${version#v}" && version="${version#mb}"
           fi
           created="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           {
@@ -298,12 +299,12 @@ jobs:
             tags+=("${IMAGE}:main")
             slim_tags+=("${IMAGE}:main-slim")
           fi
-          if [[ "${SOURCE_REF}" == refs/tags/v* ]]; then
-            version="${SOURCE_REF#refs/tags/v}"
+          if [[ "${SOURCE_REF}" == refs/tags/v* || "${SOURCE_REF}" == refs/tags/mb* ]]; then
+            version="${SOURCE_REF#refs/tags/}" && version="${version#v}" && version="${version#mb}"
             tags+=("${IMAGE}:${version}")
             slim_tags+=("${IMAGE}:${version}-slim")
             # Manual backfills should only republish the requested version tags.
-            if [[ "${IS_MANUAL_BACKFILL}" != "1" && "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$ ]]; then
+            if [[ "${IS_MANUAL_BACKFILL}" != "1" && "$version" =~ ^(mb)?[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$ ]]; then
               tags+=("${IMAGE}:latest")
               slim_tags+=("${IMAGE}:slim")
             fi
@@ -378,8 +379,8 @@ jobs:
             amd64_refs+=("${IMAGE}:main-amd64" "${IMAGE}:main-slim-amd64")
             arm64_refs+=("${IMAGE}:main-arm64" "${IMAGE}:main-slim-arm64")
           fi
-          if [[ "${SOURCE_REF}" == refs/tags/v* ]]; then
-            version="${SOURCE_REF#refs/tags/v}"
+          if [[ "${SOURCE_REF}" == refs/tags/v* || "${SOURCE_REF}" == refs/tags/mb* ]]; then
+            version="${SOURCE_REF#refs/tags/}" && version="${version#v}" && version="${version#mb}"
             multi_refs+=("${IMAGE}:${version}")
             slim_multi_refs+=("${IMAGE}:${version}-slim")
             amd64_refs+=("${IMAGE}:${version}-amd64" "${IMAGE}:${version}-slim-amd64")

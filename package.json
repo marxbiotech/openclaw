@@ -1,17 +1,17 @@
 {
-  "name": "openclaw",
-  "version": "2026.4.29",
+  "name": "@marxbiotech/openclaw",
+  "version": "2026.4.29-beta.1",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
-  "homepage": "https://github.com/openclaw/openclaw#readme",
+  "homepage": "https://github.com/marxbiotech/openclaw#readme",
   "bugs": {
-    "url": "https://github.com/openclaw/openclaw/issues"
+    "url": "https://github.com/marxbiotech/openclaw/issues"
   },
   "license": "MIT",
   "author": "",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/openclaw/openclaw.git"
+    "url": "git+https://github.com/marxbiotech/openclaw.git"
   },
   "bin": {
     "openclaw": "openclaw.mjs"

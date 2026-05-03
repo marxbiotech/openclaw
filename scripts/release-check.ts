@@ -592,7 +592,8 @@ function runPackedBundledChannelEntrySmoke(): void {
     const prefixDir = join(tmpRoot, "prefix");
     installPackedTarball(prefixDir, tarballPath, tmpRoot);
 
-    const packageRoot = join(resolveGlobalRoot(prefixDir, tmpRoot), "openclaw");
+    const packageName = JSON.parse(readFileSync(resolve("package.json"), "utf8")).name as string;
+    const packageRoot = join(resolveGlobalRoot(prefixDir, tmpRoot), ...packageName.split("/"));
     const homeDir = join(tmpRoot, "home");
     const stateDir = join(tmpRoot, "state");
     mkdirSync(homeDir, { recursive: true });
