@@ -325,12 +325,12 @@ jobs:
           set -euo pipefail
           PACKAGE_VERSION=$(node -p "require('./package.json').version")
 
-          if npm view "openclaw@${PACKAGE_VERSION}" version >/dev/null 2>&1; then
-            echo "openclaw@${PACKAGE_VERSION} is already published on npm."
+          if npm view "@marxbiotech/openclaw@${PACKAGE_VERSION}" version >/dev/null 2>&1; then
+            echo "@marxbiotech/openclaw@${PACKAGE_VERSION} is already published on npm."
             exit 1
           fi
 
-          echo "Publishing openclaw@${PACKAGE_VERSION}"
+          echo "Publishing @marxbiotech/openclaw@${PACKAGE_VERSION}"
 
       - name: Verify preflight run metadata
         env:
