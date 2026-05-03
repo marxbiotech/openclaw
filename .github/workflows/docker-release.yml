@@ -378,8 +378,8 @@ jobs:
             amd64_refs+=("${IMAGE}:main-amd64" "${IMAGE}:main-slim-amd64")
             arm64_refs+=("${IMAGE}:main-arm64" "${IMAGE}:main-slim-arm64")
           fi
-          if [[ "${SOURCE_REF}" == refs/tags/v* ]]; then
-            version="${SOURCE_REF#refs/tags/v}"
+          if [[ "${SOURCE_REF}" == refs/tags/v* || "${SOURCE_REF}" == refs/tags/mb* ]]; then
+            version="${SOURCE_REF#refs/tags/}" && version="${version#v}" && version="${version#mb}"
             multi_refs+=("${IMAGE}:${version}")
             slim_multi_refs+=("${IMAGE}:${version}-slim")
             amd64_refs+=("${IMAGE}:${version}-amd64" "${IMAGE}:${version}-slim-amd64")
