@@ -3,7 +3,11 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
-import { handleAcpEvent, resolveAcpNodeSpawnInvocation } from "./invoke-acp.js";
+import {
+  configOptionsToAcpxArgs,
+  handleAcpEvent,
+  resolveAcpNodeSpawnInvocation,
+} from "./invoke-acp.js";
 
 const tempDirs = createTrackedTempDirs();
 const createTempDir = () => tempDirs.make("invoke-acp-test-");
@@ -88,6 +92,53 @@ describe("resolveAcpNodeSpawnInvocation", () => {
     expect(result.command).toBe(shimPath);
     expect(result.argv).toEqual(["claude", "prompt"]);
     expect(result.shell).toBe(true);
+  });
+});
+
+describe("configOptionsToAcpxArgs", () => {
+  it("returns no args for an empty option map", () => {
+    expect(configOptionsToAcpxArgs({})).toEqual({ args: [], approvalOverride: null });
+  });
+
+  it("maps known keys to acpx CLI flags", () => {
+    const result = configOptionsToAcpxArgs({
+      model: "claude-sonnet-4-6",
+      timeout: "120",
+      max_turns: "4",
+      system_prompt: "you are a coder",
+      append_system_prompt: "be terse",
+      allowed_tools: "read,write",
+      auth_policy: "skip",
+    });
+    expect(result.approvalOverride).toBeNull();
+    expect(result.args).toEqual([
+      "--model",
+      "claude-sonnet-4-6",
+      "--timeout",
+      "120",
+      "--max-turns",
+      "4",
+      "--system-prompt",
+      "you are a coder",
+      "--append-system-prompt",
+      "be terse",
+      "--allowed-tools",
+      "read,write",
+      "--auth-policy",
+      "skip",
+    ]);
+  });
+
+  it("returns approval_policy as an override rather than as args", () => {
+    const result = configOptionsToAcpxArgs({ approval_policy: "deny-all" });
+    expect(result.args).toEqual([]);
+    expect(result.approvalOverride).toBe("deny-all");
+  });
+
+  it("ignores unknown keys (control-plane allowlist is the source of truth)", () => {
+    const result = configOptionsToAcpxArgs({ thinking: "high", unknown_key: "x" });
+    expect(result.args).toEqual([]);
+    expect(result.approvalOverride).toBeNull();
   });
 });
 

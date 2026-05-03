@@ -64,6 +64,81 @@ function asString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function asConfigOptionsRecord(value: unknown): Record<string, string> {
+  const rec = asRecord(value);
+  if (!rec) {
+    return {};
+  }
+  const out: Record<string, string> = {};
+  for (const [key, raw] of Object.entries(rec)) {
+    if (typeof raw === "string" && raw.length > 0) {
+      out[key] = raw;
+    }
+  }
+  return out;
+}
+
+// Translate cached ACP config options into acpx CLI flags. Keys outside this
+// table are ignored: the remote-acpx runtime advertises a configOptionKeys
+// allowlist so the control-plane rejects unsupported keys before they reach
+// here. Approval policy is special-cased because acpx exposes it as separate
+// switch flags rather than a `--key <value>` pair.
+export function configOptionsToAcpxArgs(options: Record<string, string>): {
+  args: string[];
+  approvalOverride: string | null;
+} {
+  const args: string[] = [];
+  let approvalOverride: string | null = null;
+  for (const [rawKey, value] of Object.entries(options)) {
+    const key = rawKey.toLowerCase();
+    switch (key) {
+      case "model":
+        args.push("--model", value);
+        break;
+      case "timeout":
+        args.push("--timeout", value);
+        break;
+      case "max_turns":
+        args.push("--max-turns", value);
+        break;
+      case "system_prompt":
+        args.push("--system-prompt", value);
+        break;
+      case "append_system_prompt":
+        args.push("--append-system-prompt", value);
+        break;
+      case "allowed_tools":
+        args.push("--allowed-tools", value);
+        break;
+      case "auth_policy":
+        args.push("--auth-policy", value);
+        break;
+      case "approval_policy":
+        approvalOverride = value;
+        break;
+      default:
+        // Unknown keys are ignored — the runtime side advertises
+        // configOptionKeys so the control-plane rejects unsupported keys
+        // before they get sent over the wire.
+        break;
+    }
+  }
+  return { args, approvalOverride };
+}
+
+function approvalPolicyToArgs(policy: string): string[] {
+  switch (policy) {
+    case "approve-all":
+      return ["--approve-all"];
+    case "deny-all":
+      return ["--deny-all"];
+    case "approve-reads":
+      return ["--approve-reads"];
+    default:
+      return [];
+  }
+}
+
 async function sendNodeEvent(
   client: GatewayClient,
   event: string,
@@ -166,6 +241,7 @@ async function handleTurn(payload: Record<string, unknown>, client: GatewayClien
   const permissionMode = asString(payload.permissionMode) || "approve-all";
   const agentCommand = asString(payload.agentCommand) || "acpx";
   const mode = asString(payload.mode) || "prompt";
+  const configOptions = asConfigOptionsRecord(payload.configOptions);
 
   if (!text) {
     await sendNodeEvent(client, "acp.error", {
@@ -185,12 +261,9 @@ async function handleTurn(payload: Record<string, unknown>, client: GatewayClien
 
   // Build acpx arguments
   // acpx 0.3.0+ uses --approve-all/--deny-all instead of --permission-mode
-  const permissionArgs =
-    permissionMode === "approve-all"
-      ? ["--approve-all"]
-      : permissionMode === "deny-all"
-        ? ["--deny-all"]
-        : [];
+  const { args: configArgs, approvalOverride } = configOptionsToAcpxArgs(configOptions);
+  const effectivePermissionMode = approvalOverride ?? permissionMode;
+  const permissionArgs = approvalPolicyToArgs(effectivePermissionMode);
   const args: string[] = [
     "--format",
     "json",
@@ -200,6 +273,7 @@ async function handleTurn(payload: Record<string, unknown>, client: GatewayClien
     ...permissionArgs,
     "--non-interactive-permissions",
     "deny",
+    ...configArgs,
     agent,
     mode,
     "--session",
