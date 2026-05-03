@@ -762,10 +762,10 @@ export const handleNodeEvent = async (
     case "acp.error": {
       const payload = parsePayloadObject(evt.payloadJSON);
       if (!payload) {
-        return;
+        return undefined;
       }
       getAcpNodeEventHandler()?.(nodeId, { event: evt.event, payload });
-      return;
+      return undefined;
     }
     case "push.apns.register": {
       const obj = parsePayloadObject(evt.payloadJSON);
