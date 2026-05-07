@@ -1,4 +1,4 @@
-import { loadConfig, type OpenClawConfig } from "../config/config.js";
+import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import { resolveProviderUsageSnapshotWithPlugin } from "../plugins/provider-runtime.js";
 import { resolveFetch } from "./fetch.js";
 import { type ProviderAuth, resolveProviderAuths } from "./provider-usage.auth.js";
@@ -15,6 +15,21 @@ import type {
   UsageSummary,
 } from "./provider-usage.types.js";
 
+async function fetchProviderUsageSnapshotFallback(params: {
+  auth: ProviderAuth;
+  timeoutMs: number;
+  fetchFn: typeof fetch;
+}): Promise<ProviderUsageSnapshot> {
+  void params.timeoutMs;
+  void params.fetchFn;
+  return {
+    provider: params.auth.provider,
+    displayName: PROVIDER_LABELS[params.auth.provider] ?? params.auth.provider,
+    windows: [],
+    error: "Unsupported provider",
+  };
+}
+
 type UsageSummaryOptions = {
   now?: number;
   timeoutMs?: number;
@@ -25,6 +40,7 @@ type UsageSummaryOptions = {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   fetch?: typeof fetch;
+  skipPluginAuthWithoutCredentialSource?: boolean;
 };
 
 async function fetchProviderUsageSnapshot(params: {
@@ -56,12 +72,11 @@ async function fetchProviderUsageSnapshot(params: {
   if (pluginSnapshot) {
     return pluginSnapshot;
   }
-  return {
-    provider: params.auth.provider,
-    displayName: PROVIDER_LABELS[params.auth.provider],
-    windows: [],
-    error: "Unsupported provider",
-  };
+  return await fetchProviderUsageSnapshotFallback({
+    auth: params.auth,
+    timeoutMs: params.timeoutMs,
+    fetchFn: params.fetchFn,
+  });
 }
 
 export async function loadProviderUsageSummary(
@@ -69,7 +84,7 @@ export async function loadProviderUsageSummary(
 ): Promise<UsageSummary> {
   const now = opts.now ?? Date.now();
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const config = opts.config ?? loadConfig();
+  const config = opts.config ?? getRuntimeConfig();
   const env = opts.env ?? process.env;
   const fetchFn = resolveFetch(opts.fetch);
   if (!fetchFn) {
@@ -80,6 +95,9 @@ export async function loadProviderUsageSummary(
     providers: opts.providers ?? usageProviders,
     auth: opts.auth,
     agentDir: opts.agentDir,
+    config,
+    env,
+    skipPluginAuthWithoutCredentialSource: opts.skipPluginAuthWithoutCredentialSource,
   });
   if (auths.length === 0) {
     return { updatedAt: now, providers: [] };

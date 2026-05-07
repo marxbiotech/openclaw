@@ -11,8 +11,11 @@ import {
   parseIdentityMarkdown as parseIdentityMarkdownFile,
 } from "../agents/identity-file.js";
 import { listRouteBindings } from "../config/bindings.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { AgentRuntimeConfig } from "../config/types.agents.js";
+import type { IdentityConfig } from "../config/types.base.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { normalizeOptionalString, resolvePrimaryStringValue } from "../shared/string-coerce.js";
 
 export type AgentSummary = {
   id: string;
@@ -28,6 +31,7 @@ export type AgentSummary = {
   routes?: string[];
   providers?: string[];
   isDefault: boolean;
+  runtime?: AgentRuntimeConfig;
 };
 
 type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
@@ -40,33 +44,15 @@ export function findAgentEntryIndex(list: AgentEntry[], agentId: string): number
   return list.findIndex((entry) => normalizeAgentId(entry.id) === id);
 }
 
-function resolveAgentName(cfg: OpenClawConfig, agentId: string) {
-  const entry = listAgentEntries(cfg).find(
-    (agent) => normalizeAgentId(agent.id) === normalizeAgentId(agentId),
-  );
-  return entry?.name?.trim() || undefined;
-}
-
 function resolveAgentModel(cfg: OpenClawConfig, agentId: string) {
   const entry = listAgentEntries(cfg).find(
     (agent) => normalizeAgentId(agent.id) === normalizeAgentId(agentId),
   );
-  if (entry?.model) {
-    if (typeof entry.model === "string" && entry.model.trim()) {
-      return entry.model.trim();
-    }
-    if (typeof entry.model === "object") {
-      const primary = entry.model.primary?.trim();
-      if (primary) {
-        return primary;
-      }
-    }
+  const entryPrimary = resolvePrimaryStringValue(entry?.model);
+  if (entryPrimary) {
+    return entryPrimary;
   }
-  const raw = cfg.agents?.defaults?.model;
-  if (typeof raw === "string") {
-    return raw;
-  }
-  return raw?.primary?.trim() || undefined;
+  return resolvePrimaryStringValue(cfg.agents?.defaults?.model);
 }
 
 export function parseIdentityMarkdown(content: string): AgentIdentity {
@@ -99,9 +85,8 @@ export function buildAgentSummaries(cfg: OpenClawConfig): AgentSummary[] {
   return ordered.map((id) => {
     const workspace = resolveAgentWorkspaceDir(cfg, id);
     const identity = loadAgentIdentity(workspace);
-    const configIdentity = configuredAgents.find(
-      (agent) => normalizeAgentId(agent.id) === id,
-    )?.identity;
+    const agentEntry = configuredAgents.find((agent) => normalizeAgentId(agent.id) === id);
+    const configIdentity = agentEntry?.identity;
     const identityName = identity?.name ?? configIdentity?.name?.trim();
     const identityEmoji = identity?.emoji ?? configIdentity?.emoji?.trim();
     const identitySource = identity
@@ -109,9 +94,11 @@ export function buildAgentSummaries(cfg: OpenClawConfig): AgentSummary[] {
       : configIdentity && (identityName || identityEmoji)
         ? "config"
         : undefined;
-    return {
+    const summary: AgentSummary = {
       id,
-      name: resolveAgentName(cfg, id),
+      name: normalizeOptionalString(
+        configuredAgents.find((agent) => normalizeAgentId(agent.id) === id)?.name,
+      ),
       identityName,
       identityEmoji,
       identitySource,
@@ -121,6 +108,10 @@ export function buildAgentSummaries(cfg: OpenClawConfig): AgentSummary[] {
       bindings: bindingCounts.get(id) ?? 0,
       isDefault: id === defaultAgentId,
     };
+    if (agentEntry?.runtime) {
+      summary.runtime = agentEntry.runtime;
+    }
+    return summary;
   });
 }
 
@@ -132,6 +123,7 @@ export function applyAgentConfig(
     workspace?: string;
     agentDir?: string;
     model?: string;
+    identity?: IdentityConfig;
   },
 ): OpenClawConfig {
   const agentId = normalizeAgentId(params.agentId);
@@ -139,12 +131,14 @@ export function applyAgentConfig(
   const list = listAgentEntries(cfg);
   const index = findAgentEntryIndex(list, agentId);
   const base = index >= 0 ? list[index] : { id: agentId };
+  const mergedIdentity = params.identity ? { ...base.identity, ...params.identity } : undefined;
   const nextEntry: AgentEntry = {
     ...base,
     ...(name ? { name } : {}),
     ...(params.workspace ? { workspace: params.workspace } : {}),
     ...(params.agentDir ? { agentDir: params.agentDir } : {}),
     ...(params.model ? { model: params.model } : {}),
+    ...(mergedIdentity ? { identity: mergedIdentity } : {}),
   };
   const nextList = [...list];
   if (index >= 0) {

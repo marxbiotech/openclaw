@@ -1,18 +1,16 @@
-import { formatCliCommand } from "../../cli/command-format.js";
-import type { OpenClawConfig } from "../../config/config.js";
-import { normalizeProviderId } from "../model-selection.js";
-import { listProfilesForProvider } from "./profiles.js";
-import { suggestOAuthProfileIdForLegacyDefault } from "./repair.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { buildProviderAuthDoctorHintWithPlugin } from "../../plugins/provider-runtime.runtime.js";
+import { normalizeProviderId } from "../provider-id.js";
 import type { AuthProfileStore } from "./types.js";
 
-let providerRuntimePromise:
-  | Promise<typeof import("../../plugins/provider-runtime.runtime.js")>
-  | undefined;
-
-function loadProviderRuntime() {
-  providerRuntimePromise ??= import("../../plugins/provider-runtime.runtime.js");
-  return providerRuntimePromise;
-}
+/**
+ * Migration hints for deprecated/removed OAuth providers.
+ * Users with stale credentials should be guided to migrate.
+ */
+const DEPRECATED_PROVIDER_MIGRATION_HINTS: Record<string, string> = {
+  "qwen-portal":
+    "Qwen OAuth via portal.qwen.ai has been deprecated. Please migrate to Qwen Cloud Coding Plan. Run: openclaw onboard --auth-choice qwen-api-key (or qwen-api-key-cn for the China endpoint). Legacy modelstudio auth-choice ids still work.",
+};
 
 export async function formatAuthDoctorHint(params: {
   cfg?: OpenClawConfig;
@@ -21,7 +19,13 @@ export async function formatAuthDoctorHint(params: {
   profileId?: string;
 }): Promise<string> {
   const normalizedProvider = normalizeProviderId(params.provider);
-  const { buildProviderAuthDoctorHintWithPlugin } = await loadProviderRuntime();
+
+  // Check for deprecated provider migration hints first
+  const migrationHint = DEPRECATED_PROVIDER_MIGRATION_HINTS[normalizedProvider];
+  if (migrationHint) {
+    return migrationHint;
+  }
+
   const pluginHint = await buildProviderAuthDoctorHintWithPlugin({
     provider: normalizedProvider,
     context: {
@@ -34,38 +38,5 @@ export async function formatAuthDoctorHint(params: {
   if (typeof pluginHint === "string" && pluginHint.trim()) {
     return pluginHint;
   }
-
-  const providerKey = normalizeProviderId(params.provider);
-  if (providerKey !== "anthropic") {
-    return "";
-  }
-
-  const legacyProfileId = params.profileId ?? "anthropic:default";
-  const suggested = suggestOAuthProfileIdForLegacyDefault({
-    cfg: params.cfg,
-    store: params.store,
-    provider: providerKey,
-    legacyProfileId,
-  });
-  if (!suggested || suggested === legacyProfileId) {
-    return "";
-  }
-
-  const storeOauthProfiles = listProfilesForProvider(params.store, providerKey)
-    .filter((id) => params.store.profiles[id]?.type === "oauth")
-    .join(", ");
-
-  const cfgMode = params.cfg?.auth?.profiles?.[legacyProfileId]?.mode;
-  const cfgProvider = params.cfg?.auth?.profiles?.[legacyProfileId]?.provider;
-
-  return [
-    "Doctor hint (for GitHub issue):",
-    `- provider: ${providerKey}`,
-    `- config: ${legacyProfileId}${
-      cfgProvider || cfgMode ? ` (provider=${cfgProvider ?? "?"}, mode=${cfgMode ?? "?"})` : ""
-    }`,
-    `- auth store oauth profiles: ${storeOauthProfiles || "(none)"}`,
-    `- suggested profile: ${suggested}`,
-    `Fix: run "${formatCliCommand("openclaw doctor --yes")}"`,
-  ].join("\n");
+  return "";
 }
