@@ -35,6 +35,11 @@ export function createLineNodeWebhookHandler(params: {
 }): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
   const maxBodyBytes = params.maxBodyBytes ?? LINE_WEBHOOK_MAX_BODY_BYTES;
   const readBody = params.readBody ?? readLineWebhookRequestBody;
+  const logError = (err: unknown, prefix: string) => {
+    const detail = err instanceof Error ? (err.stack ?? err.message) : String(err);
+    const fn = params.runtime.error ?? console.error;
+    fn(danger(`${prefix}: ${detail}`));
+  };
 
   return async (req: IncomingMessage, res: ServerResponse) => {
     if (req.method === "GET" || req.method === "HEAD") {
@@ -99,14 +104,16 @@ export function createLineNodeWebhookHandler(params: {
 
       params.onRequestAuthenticated?.();
 
-      if (body.events && body.events.length > 0) {
-        logVerbose(`line: received ${body.events.length} webhook events`);
-        await params.bot.handleWebhook(body);
-      }
-
       res.statusCode = 200;
       res.setHeader("Content-Type", "application/json");
       res.end(JSON.stringify({ status: "ok" }));
+
+      if (body.events && body.events.length > 0) {
+        logVerbose(`line: received ${body.events.length} webhook events`);
+        void Promise.resolve()
+          .then(() => params.bot.handleWebhook(body))
+          .catch((err: unknown) => logError(err, "line webhook background processing error"));
+      }
     } catch (err) {
       if (isRequestBodyLimitError(err, "PAYLOAD_TOO_LARGE")) {
         res.statusCode = 413;
@@ -120,7 +127,7 @@ export function createLineNodeWebhookHandler(params: {
         res.end(JSON.stringify({ error: requestBodyErrorToText("REQUEST_BODY_TIMEOUT") }));
         return;
       }
-      params.runtime.error?.(danger(`line webhook error: ${String(err)}`));
+      logError(err, "line webhook error");
       if (!res.headersSent) {
         res.statusCode = 500;
         res.setHeader("Content-Type", "application/json");
