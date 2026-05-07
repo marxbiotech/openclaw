@@ -33,6 +33,12 @@ export function createLineWebhookMiddleware(
 ): (req: Request, res: Response, _next: NextFunction) => Promise<void> {
   const { channelSecret, onEvents, runtime } = options;
 
+  const logError = (err: unknown, prefix: string) => {
+    const detail = err instanceof Error ? (err.stack ?? err.message) : String(err);
+    const fn = runtime?.error ?? console.error;
+    fn(danger(`${prefix}: ${detail}`));
+  };
+
   return async (req: Request, res: Response, _next: NextFunction): Promise<void> => {
     try {
       const signature = req.headers["x-line-signature"];
@@ -66,14 +72,16 @@ export function createLineWebhookMiddleware(
         return;
       }
 
+      res.status(200).json({ status: "ok" });
+
       if (body.events && body.events.length > 0) {
         logVerbose(`line: received ${body.events.length} webhook events`);
-        await onEvents(body);
+        void Promise.resolve()
+          .then(() => onEvents(body))
+          .catch((err: unknown) => logError(err, "line webhook background processing error"));
       }
-
-      res.status(200).json({ status: "ok" });
     } catch (err) {
-      runtime?.error?.(danger(`line webhook error: ${String(err)}`));
+      logError(err, "line webhook error");
       if (!res.headersSent) {
         res.status(500).json({ error: "Internal server error" });
       }
