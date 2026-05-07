@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { webhook } from "@line/bot-sdk";
 import { describe, expect, it, vi } from "vitest";
 import { createMockIncomingRequest } from "../../../test/helpers/mock-incoming-request.js";
 import { createLineNodeWebhookHandler, readLineWebhookRequestBody } from "./webhook-node.js";
@@ -280,14 +281,14 @@ describe("createLineNodeWebhookHandler", () => {
     );
   });
 
-  it("releases authenticated requests before event processing completes", async () => {
+  it("sends res.end strictly before handleWebhook is invoked (mid-flight ack ordering)", async () => {
     const rawBody = JSON.stringify({ events: [{ type: "message" }] });
-    let releaseAuthenticated!: () => void;
+    let releaseHandle!: () => void;
     const bot = {
       handleWebhook: vi.fn(
         async () =>
           await new Promise<void>((resolve) => {
-            releaseAuthenticated = resolve;
+            releaseHandle = resolve;
           }),
       ),
     };
@@ -305,18 +306,26 @@ describe("createLineNodeWebhookHandler", () => {
     const request = runSignedPost({ handler, rawBody, secret: SECRET, res });
 
     await vi.waitFor(() => {
-      expect(onRequestAuthenticated).toHaveBeenCalledTimes(1);
       expect(bot.handleWebhook).toHaveBeenCalledTimes(1);
     });
 
-    expect(res.headersSent).toBe(false);
-    releaseAuthenticated();
-    await request;
-
+    expect(res.headersSent).toBe(true);
     expect(res.statusCode).toBe(200);
+    expect(res.body).toBe(JSON.stringify({ status: "ok" }));
+    expect(onRequestAuthenticated).toHaveBeenCalledTimes(1);
+
+    const endMock = res.end as unknown as ReturnType<typeof vi.fn>;
+    const endOrder = endMock.mock.invocationCallOrder[0];
+    const handleOrder = bot.handleWebhook.mock.invocationCallOrder[0];
+    expect(endOrder).toBeDefined();
+    expect(handleOrder).toBeDefined();
+    expect(endOrder).toBeLessThan(handleOrder);
+
+    releaseHandle();
+    await request;
   });
 
-  it("returns 500 when event processing fails and does not acknowledge with 200", async () => {
+  it("acknowledges with 200 even when background event processing fails, and logs via runtime.error with stack preserved", async () => {
     const rawBody = JSON.stringify({ events: [{ type: "message" }] });
     const { secret } = createPostWebhookTestHarness(rawBody);
     const failingBot = {
@@ -335,10 +344,109 @@ describe("createLineNodeWebhookHandler", () => {
     const { res } = createRes();
     await runSignedPost({ handler: failingHandler, rawBody, secret, res });
 
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toBe(JSON.stringify({ status: "ok" }));
+    expect(failingBot.handleWebhook).toHaveBeenCalledTimes(1);
+
+    await vi.waitFor(() => {
+      expect(runtime.error).toHaveBeenCalledTimes(1);
+    });
+    const logged = String(runtime.error.mock.calls[0]?.[0]);
+    expect(logged).toMatch(/line webhook background processing error: /);
+    expect(logged).toMatch(/transient failure/);
+    expect(logged).toMatch(/at /);
+  });
+
+  it("normalizes synchronous throws from handleWebhook into the background log", async () => {
+    const rawBody = JSON.stringify({ events: [{ type: "message" }] });
+    const { secret } = createPostWebhookTestHarness(rawBody);
+    const syncThrowingBot = {
+      handleWebhook: vi.fn((() => {
+        throw new Error("sync boom");
+      }) as unknown as () => Promise<void>),
+    };
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const handler = createLineNodeWebhookHandler({
+      channelSecret: secret,
+      bot: syncThrowingBot,
+      runtime,
+      readBody: async () => rawBody,
+    });
+
+    const { res } = createRes();
+    await runSignedPost({ handler, rawBody, secret, res });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toBe(JSON.stringify({ status: "ok" }));
+    expect(syncThrowingBot.handleWebhook).toHaveBeenCalledTimes(1);
+
+    await vi.waitFor(() => {
+      expect(runtime.error).toHaveBeenCalledTimes(1);
+    });
+    const logged = String(runtime.error.mock.calls[0]?.[0]);
+    expect(logged).toMatch(/line webhook background processing error: /);
+    expect(logged).toMatch(/sync boom/);
+    expect(logged).not.toMatch(/^[^]*line webhook error: /);
+  });
+
+  it("falls back to console.error when runtime.error is missing on background failure", async () => {
+    const rawBody = JSON.stringify({ events: [{ type: "message" }] });
+    const failingBot = {
+      handleWebhook: vi.fn(async () => {
+        throw new Error("orphan failure");
+      }),
+    };
+    const partialRuntime = { log: vi.fn(), exit: vi.fn() } as unknown as Parameters<
+      typeof createLineNodeWebhookHandler
+    >[0]["runtime"];
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const handler = createLineNodeWebhookHandler({
+        channelSecret: SECRET,
+        bot: failingBot,
+        runtime: partialRuntime,
+        readBody: async () => rawBody,
+      });
+
+      const { res } = createRes();
+      await runSignedPost({ handler, rawBody, secret: SECRET, res });
+
+      expect(res.statusCode).toBe(200);
+      await vi.waitFor(() => {
+        expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+      });
+      const logged = String(consoleErrorSpy.mock.calls[0]?.[0]);
+      expect(logged).toMatch(/line webhook background processing error: /);
+      expect(logged).toMatch(/orphan failure/);
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+  });
+
+  it("returns 500 from outer catch when readBody throws unexpectedly before ack", async () => {
+    const rawBody = JSON.stringify({ events: [{ type: "message" }] });
+    const bot = { handleWebhook: vi.fn(async () => {}) };
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const handler = createLineNodeWebhookHandler({
+      channelSecret: SECRET,
+      bot,
+      runtime,
+      readBody: async () => {
+        throw new Error("synthetic readBody failure");
+      },
+    });
+
+    const { res } = createRes();
+    await runSignedPost({ handler, rawBody, secret: SECRET, res });
+
     expect(res.statusCode).toBe(500);
     expect(res.body).toBe(JSON.stringify({ error: "Internal server error" }));
-    expect(failingBot.handleWebhook).toHaveBeenCalledTimes(1);
+    expect(bot.handleWebhook).not.toHaveBeenCalled();
     expect(runtime.error).toHaveBeenCalledTimes(1);
+    const logged = String(runtime.error.mock.calls[0]?.[0]);
+    expect(logged).toMatch(/line webhook error: /);
+    expect(logged).not.toMatch(/background processing error/);
+    expect(logged).toMatch(/synthetic readBody failure/);
   });
 
   it("returns 400 for invalid JSON payload even when signature is valid", async () => {
@@ -485,7 +593,7 @@ describe("createLineWebhookMiddleware", () => {
     expect(onEvents).not.toHaveBeenCalled();
   });
 
-  it("returns 500 when event processing fails and does not acknowledge with 200", async () => {
+  it("acknowledges with 200 even when background event processing fails, and logs via runtime.error with stack preserved", async () => {
     const onEvents = vi.fn(async () => {
       throw new Error("boom");
     });
@@ -505,9 +613,112 @@ describe("createLineWebhookMiddleware", () => {
 
     await middleware(req, res, {} as any);
 
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.status).not.toHaveBeenCalledWith(500);
+    expect(res.json).toHaveBeenCalledWith({ status: "ok" });
+    expect(onEvents).toHaveBeenCalledTimes(1);
+
+    await vi.waitFor(() => {
+      expect(runtime.error).toHaveBeenCalledTimes(1);
+    });
+    const logged = String(runtime.error.mock.calls[0]?.[0]);
+    expect(logged).toMatch(/line webhook background processing error: /);
+    expect(logged).toMatch(/boom/);
+    expect(logged).toMatch(/at /);
+  });
+
+  it("normalizes synchronous throws from onEvents into the background log", async () => {
+    const onEvents = vi.fn((() => {
+      throw new Error("sync onEvents boom");
+    }) as unknown as (body: webhook.CallbackRequest) => Promise<void>);
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const rawBody = JSON.stringify({ events: [{ type: "message" }] });
+    const middleware = createLineWebhookMiddleware({
+      channelSecret: SECRET,
+      onEvents,
+      runtime,
+    });
+
+    const req = {
+      headers: { "x-line-signature": sign(rawBody, SECRET) },
+      body: rawBody,
+    } as any;
+    const res = createMiddlewareRes();
+
+    await middleware(req, res, {} as any);
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.status).not.toHaveBeenCalledWith(500);
+    expect(onEvents).toHaveBeenCalledTimes(1);
+
+    await vi.waitFor(() => {
+      expect(runtime.error).toHaveBeenCalledTimes(1);
+    });
+    const logged = String(runtime.error.mock.calls[0]?.[0]);
+    expect(logged).toMatch(/line webhook background processing error: /);
+    expect(logged).toMatch(/sync onEvents boom/);
+  });
+
+  it("falls back to console.error when runtime is omitted on background failure", async () => {
+    const onEvents = vi.fn(async () => {
+      throw new Error("orphan failure");
+    });
+    const rawBody = JSON.stringify({ events: [{ type: "message" }] });
+    const middleware = createLineWebhookMiddleware({
+      channelSecret: SECRET,
+      onEvents,
+    });
+
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const req = {
+        headers: { "x-line-signature": sign(rawBody, SECRET) },
+        body: rawBody,
+      } as any;
+      const res = createMiddlewareRes();
+
+      await middleware(req, res, {} as any);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      await vi.waitFor(() => {
+        expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+      });
+      const logged = String(consoleErrorSpy.mock.calls[0]?.[0]);
+      expect(logged).toMatch(/line webhook background processing error: /);
+      expect(logged).toMatch(/orphan failure/);
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+  });
+
+  it("returns 500 from outer catch when readRawBody throws unexpectedly before ack", async () => {
+    const onEvents = vi.fn(async () => {});
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const middleware = createLineWebhookMiddleware({
+      channelSecret: SECRET,
+      onEvents,
+      runtime,
+    });
+
+    const req: any = {
+      headers: { "x-line-signature": "any" },
+    };
+    Object.defineProperty(req, "body", {
+      get() {
+        throw new Error("synthetic body accessor failure");
+      },
+    });
+    const res = createMiddlewareRes();
+
+    await middleware(req, res, {} as any);
+
     expect(res.status).toHaveBeenCalledWith(500);
-    expect(res.status).not.toHaveBeenCalledWith(200);
     expect(res.json).toHaveBeenCalledWith({ error: "Internal server error" });
-    expect(runtime.error).toHaveBeenCalled();
+    expect(onEvents).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledTimes(1);
+    const logged = String(runtime.error.mock.calls[0]?.[0]);
+    expect(logged).toMatch(/line webhook error: /);
+    expect(logged).not.toMatch(/background processing error/);
+    expect(logged).toMatch(/synthetic body accessor failure/);
   });
 });
