@@ -280,14 +280,14 @@ describe("createLineNodeWebhookHandler", () => {
     );
   });
 
-  it("releases authenticated requests before event processing completes", async () => {
+  it("acknowledges with 200 before event processing completes", async () => {
     const rawBody = JSON.stringify({ events: [{ type: "message" }] });
-    let releaseAuthenticated!: () => void;
+    let releaseHandle!: () => void;
     const bot = {
       handleWebhook: vi.fn(
         async () =>
           await new Promise<void>((resolve) => {
-            releaseAuthenticated = resolve;
+            releaseHandle = resolve;
           }),
       ),
     };
@@ -302,21 +302,18 @@ describe("createLineNodeWebhookHandler", () => {
     });
 
     const { res } = createRes();
-    const request = runSignedPost({ handler, rawBody, secret: SECRET, res });
-
-    await vi.waitFor(() => {
-      expect(onRequestAuthenticated).toHaveBeenCalledTimes(1);
-      expect(bot.handleWebhook).toHaveBeenCalledTimes(1);
-    });
-
-    expect(res.headersSent).toBe(false);
-    releaseAuthenticated();
-    await request;
+    await runSignedPost({ handler, rawBody, secret: SECRET, res });
 
     expect(res.statusCode).toBe(200);
+    expect(res.headersSent).toBe(true);
+    expect(res.body).toBe(JSON.stringify({ status: "ok" }));
+    expect(onRequestAuthenticated).toHaveBeenCalledTimes(1);
+    expect(bot.handleWebhook).toHaveBeenCalledTimes(1);
+
+    releaseHandle();
   });
 
-  it("returns 500 when event processing fails and does not acknowledge with 200", async () => {
+  it("acknowledges with 200 even when background event processing fails, and logs via runtime.error", async () => {
     const rawBody = JSON.stringify({ events: [{ type: "message" }] });
     const { secret } = createPostWebhookTestHarness(rawBody);
     const failingBot = {
@@ -335,10 +332,14 @@ describe("createLineNodeWebhookHandler", () => {
     const { res } = createRes();
     await runSignedPost({ handler: failingHandler, rawBody, secret, res });
 
-    expect(res.statusCode).toBe(500);
-    expect(res.body).toBe(JSON.stringify({ error: "Internal server error" }));
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toBe(JSON.stringify({ status: "ok" }));
     expect(failingBot.handleWebhook).toHaveBeenCalledTimes(1);
-    expect(runtime.error).toHaveBeenCalledTimes(1);
+
+    await vi.waitFor(() => {
+      expect(runtime.error).toHaveBeenCalledTimes(1);
+    });
+    expect(String(runtime.error.mock.calls[0]?.[0] ?? "")).toMatch(/background processing error/);
   });
 
   it("returns 400 for invalid JSON payload even when signature is valid", async () => {
@@ -485,7 +486,7 @@ describe("createLineWebhookMiddleware", () => {
     expect(onEvents).not.toHaveBeenCalled();
   });
 
-  it("returns 500 when event processing fails and does not acknowledge with 200", async () => {
+  it("acknowledges with 200 even when background event processing fails, and logs via runtime.error", async () => {
     const onEvents = vi.fn(async () => {
       throw new Error("boom");
     });
@@ -505,9 +506,14 @@ describe("createLineWebhookMiddleware", () => {
 
     await middleware(req, res, {} as any);
 
-    expect(res.status).toHaveBeenCalledWith(500);
-    expect(res.status).not.toHaveBeenCalledWith(200);
-    expect(res.json).toHaveBeenCalledWith({ error: "Internal server error" });
-    expect(runtime.error).toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.status).not.toHaveBeenCalledWith(500);
+    expect(res.json).toHaveBeenCalledWith({ status: "ok" });
+    expect(onEvents).toHaveBeenCalledTimes(1);
+
+    await vi.waitFor(() => {
+      expect(runtime.error).toHaveBeenCalled();
+    });
+    expect(String(runtime.error.mock.calls[0]?.[0] ?? "")).toMatch(/background processing error/);
   });
 });

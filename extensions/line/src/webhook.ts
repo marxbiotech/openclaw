@@ -66,12 +66,14 @@ export function createLineWebhookMiddleware(
         return;
       }
 
+      res.status(200).json({ status: "ok" });
+
       if (body.events && body.events.length > 0) {
         logVerbose(`line: received ${body.events.length} webhook events`);
-        await onEvents(body);
+        onEvents(body).catch((err: unknown) => {
+          runtime?.error?.(danger(`line webhook background processing error: ${String(err)}`));
+        });
       }
-
-      res.status(200).json({ status: "ok" });
     } catch (err) {
       runtime?.error?.(danger(`line webhook error: ${String(err)}`));
       if (!res.headersSent) {
