@@ -236,7 +236,6 @@ async function handleTurn(payload: Record<string, unknown>, client: GatewayClien
   const acpSessionId = asString(payload.acpSessionId);
   const agent = asString(payload.agent) || "claude";
   const text = asString(payload.text);
-  const _sessionName = asString(payload.sessionName);
   const cwd = asString(payload.cwd) || process.cwd();
   const permissionMode = asString(payload.permissionMode) || "approve-all";
   const agentCommand = asString(payload.agentCommand) || "acpx";

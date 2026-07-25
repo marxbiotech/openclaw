@@ -16,7 +16,7 @@ export type {
   AcpRuntimeTurnAttachment,
   AcpRuntimeTurnInput,
   AcpSessionUpdateTag,
-} from "../acp/runtime/types.js";
+} from "@openclaw/acp-core/runtime/types";
 export type {
   OpenClawPluginApi,
   OpenClawPluginService,
