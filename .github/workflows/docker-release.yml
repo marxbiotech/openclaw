@@ -5,6 +5,7 @@ on:
     tags:
       - "v*"
       - "!v*-alpha.*"
+      - "mb*"
     paths-ignore:
       - "docs/**"
       - "**/*.md"
@@ -14,7 +15,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing stable or beta release tag to backfill (for example v2026.3.22 or v2026.3.22-beta.1)
+        description: Existing stable or beta release tag to backfill (for example v2026.3.22, v2026.3.22-beta.1, or mb2026.7.1-beta.1)
         required: true
         type: string
 
@@ -45,7 +46,7 @@ jobs:
             echo "Docker alpha image publishing is disabled."
             exit 1
           fi
-          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-beta\.[1-9][0-9]*)?$ ]]; then
+          if [[ ! "${RELEASE_TAG}" =~ ^(v|mb)[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-beta\.[1-9][0-9]*)?$ ]]; then
             echo "Invalid release tag: ${RELEASE_TAG}"
             exit 1
           fi
@@ -162,8 +163,8 @@ jobs:
           if grep -q '^ARG OPENCLAW_INSTALL_BROWSER' Dockerfile; then
             browser_supported=1
           fi
-          if [[ "${SOURCE_REF}" == refs/tags/v* ]]; then
-            version="${SOURCE_REF#refs/tags/v}"
+          if [[ "${SOURCE_REF}" == refs/tags/v* || "${SOURCE_REF}" == refs/tags/mb* ]]; then
+            version="${SOURCE_REF#refs/tags/}" && version="${version#v}"
             for image in "${images[@]}"; do
               tags+=("${image}:${version}-amd64")
               slim_tags+=("${image}:${version}-slim-amd64")
@@ -197,8 +198,8 @@ jobs:
           if [[ "${SOURCE_REF}" == "refs/heads/main" ]]; then
             version="main"
           fi
-          if [[ "${SOURCE_REF}" == refs/tags/v* ]]; then
-            version="${SOURCE_REF#refs/tags/v}"
+          if [[ "${SOURCE_REF}" == refs/tags/v* || "${SOURCE_REF}" == refs/tags/mb* ]]; then
+            version="${SOURCE_REF#refs/tags/}" && version="${version#v}"
           fi
           created="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           {
@@ -365,8 +366,8 @@ jobs:
           if grep -q '^ARG OPENCLAW_INSTALL_BROWSER' Dockerfile; then
             browser_supported=1
           fi
-          if [[ "${SOURCE_REF}" == refs/tags/v* ]]; then
-            version="${SOURCE_REF#refs/tags/v}"
+          if [[ "${SOURCE_REF}" == refs/tags/v* || "${SOURCE_REF}" == refs/tags/mb* ]]; then
+            version="${SOURCE_REF#refs/tags/}" && version="${version#v}"
             for image in "${images[@]}"; do
               tags+=("${image}:${version}-arm64")
               slim_tags+=("${image}:${version}-slim-arm64")
@@ -400,8 +401,8 @@ jobs:
           if [[ "${SOURCE_REF}" == "refs/heads/main" ]]; then
             version="main"
           fi
-          if [[ "${SOURCE_REF}" == refs/tags/v* ]]; then
-            version="${SOURCE_REF#refs/tags/v}"
+          if [[ "${SOURCE_REF}" == refs/tags/v* || "${SOURCE_REF}" == refs/tags/mb* ]]; then
+            version="${SOURCE_REF#refs/tags/}" && version="${version#v}"
           fi
           created="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           {
@@ -564,8 +565,8 @@ jobs:
           if grep -q '^ARG OPENCLAW_INSTALL_BROWSER' Dockerfile; then
             browser_supported=1
           fi
-          if [[ "${SOURCE_REF}" == refs/tags/v* ]]; then
-            version="${SOURCE_REF#refs/tags/v}"
+          if [[ "${SOURCE_REF}" == refs/tags/v* || "${SOURCE_REF}" == refs/tags/mb* ]]; then
+            version="${SOURCE_REF#refs/tags/}" && version="${version#v}"
             tags+=("${GHCR_IMAGE}:${version}")
             slim_tags+=("${GHCR_IMAGE}:${version}-slim")
             dockerhub_tags+=("${DOCKERHUB_IMAGE}:${version}")
@@ -575,7 +576,8 @@ jobs:
               dockerhub_browser_tags+=("${DOCKERHUB_IMAGE}:${version}-browser")
             fi
             # Beta releases and manual backfills publish only immutable version tags;
-            # do not advance latest/main aliases from those flows.
+            # do not advance latest/main aliases from those flows. Mb-prefixed
+            # (marxbiotech) tags are similarly restricted to their version tag.
             if [[ "${IS_MANUAL_BACKFILL}" != "1" && "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$ ]]; then
               tags+=("${GHCR_IMAGE}:latest" "${GHCR_IMAGE}:main")
               slim_tags+=("${GHCR_IMAGE}:slim" "${GHCR_IMAGE}:main-slim")
@@ -637,11 +639,11 @@ jobs:
             docker buildx imagetools create "${args[@]}" "$amd64_digest" "$arm64_digest"
           }
           create_manifest "${AMD64_DIGEST}" "${ARM64_DIGEST}" "${tags[@]}"
-          if [[ "${SOURCE_REF}" != refs/tags/v* ]]; then
+          if [[ "${SOURCE_REF}" != refs/tags/v* && "${SOURCE_REF}" != refs/tags/mb* ]]; then
             echo "::error::No Docker Hub source refs resolved for ref ${SOURCE_REF}"
             exit 1
           fi
-          version="${SOURCE_REF#refs/tags/v}"
+          version="${SOURCE_REF#refs/tags/}" && version="${version#v}"
           create_manifest "${DOCKERHUB_IMAGE}:${version}-amd64" "${DOCKERHUB_IMAGE}:${version}-arm64" "${dockerhub_tags[@]}"
           if [[ -n "${BROWSER_TAGS}" ]]; then
             create_manifest "${AMD64_BROWSER_DIGEST}" "${ARM64_BROWSER_DIGEST}" "${browser_tags[@]}"
@@ -703,7 +705,7 @@ jobs:
           dockerhub_amd64_refs=()
           dockerhub_arm64_refs=()
           browser_supported=0
-          if [[ "${SOURCE_REF}" == refs/tags/v* ]]; then
+          if [[ "${SOURCE_REF}" == refs/tags/v* || "${SOURCE_REF}" == refs/tags/mb* ]]; then
             tag="${SOURCE_REF#refs/tags/}"
             git fetch --depth=1 origin "refs/tags/${tag}:refs/tags/${tag}"
             if git show "${SOURCE_REF}:Dockerfile" | grep -q '^ARG OPENCLAW_INSTALL_BROWSER'; then
@@ -712,8 +714,8 @@ jobs:
           elif grep -q '^ARG OPENCLAW_INSTALL_BROWSER' Dockerfile; then
             browser_supported=1
           fi
-          if [[ "${SOURCE_REF}" == refs/tags/v* ]]; then
-            version="${SOURCE_REF#refs/tags/v}"
+          if [[ "${SOURCE_REF}" == refs/tags/v* || "${SOURCE_REF}" == refs/tags/mb* ]]; then
+            version="${SOURCE_REF#refs/tags/}" && version="${version#v}"
             multi_refs+=("${GHCR_IMAGE}:${version}")
             slim_multi_refs+=("${GHCR_IMAGE}:${version}-slim")
             dockerhub_multi_refs+=("${DOCKERHUB_IMAGE}:${version}")

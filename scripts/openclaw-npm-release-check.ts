@@ -62,7 +62,10 @@ type NpmDistTagMirrorAuth = {
   hasAuth: boolean;
   source: "node-auth-token" | "npm-token" | "none";
 };
-const EXPECTED_REPOSITORY_URL = "https://github.com/openclaw/openclaw";
+const EXPECTED_REPOSITORY_URLS = new Set([
+  "https://github.com/openclaw/openclaw",
+  "https://github.com/marxbiotech/openclaw",
+]);
 const OPTIONAL_LOCAL_EMBEDDING_RUNTIME_PACKAGE = "node-llama-cpp";
 const FS_SAFE_PACKAGE = "@openclaw/fs-safe";
 const REQUIRED_PACKED_PATHS = [
@@ -197,11 +200,14 @@ function isLocalDependencySpec(value: string | undefined): boolean {
 }
 
 export function parseReleaseVersion(version: string): ParsedReleaseVersion | null {
-  return parseReleaseVersionBase(version) as ParsedReleaseVersion | null;
+  return parseReleaseVersionBase(version.trim().replace(/^mb/, "")) as ParsedReleaseVersion | null;
 }
 
 export function compareReleaseVersions(left: string, right: string): number | null {
-  return compareReleaseVersionsBase(left, right);
+  return compareReleaseVersionsBase(
+    left.trim().replace(/^mb/, ""),
+    right.trim().replace(/^mb/, ""),
+  );
 }
 
 export function resolveNpmPublishPlan(
@@ -359,9 +365,9 @@ export function collectReleasePackageMetadataErrors(pkg: PackageJson): string[] 
   if (pkg.license !== "MIT") {
     errors.push(`package.json license must be "MIT"; found "${pkg.license ?? ""}".`);
   }
-  if (actualRepositoryUrl !== EXPECTED_REPOSITORY_URL) {
+  if (!EXPECTED_REPOSITORY_URLS.has(actualRepositoryUrl)) {
     errors.push(
-      `package.json repository.url must resolve to ${EXPECTED_REPOSITORY_URL}; found ${
+      `package.json repository.url must resolve to one of ${[...EXPECTED_REPOSITORY_URLS].join(", ")}; found ${
         actualRepositoryUrl || "<missing>"
       }.`,
     );
@@ -419,15 +425,15 @@ export function collectReleaseTagErrors(params: {
     errors.push(...collectReleaseVersionFloorErrorsBase(parsedVersion));
   }
 
-  if (!releaseTag.startsWith("mb")) {
-    errors.push(`Release tag must start with "mb"; found "${releaseTag || "<missing>"}".`);
+  if (!releaseTag.startsWith("v") && !releaseTag.startsWith("mb")) {
+    errors.push(`Release tag must start with "v" or "mb"; found "${releaseTag || "<missing>"}".`);
   }
 
-  const tagVersion = releaseTag.startsWith("v") ? releaseTag.slice(1) : releaseTag;
+  const tagVersion = releaseTag.replace(/^(v|mb)/, "");
   const parsedTag = parseReleaseTagVersion(tagVersion);
   if (parsedTag === null) {
     errors.push(
-      `Release tag must match vYYYY.M.PATCH, vYYYY.M.PATCH-alpha.N, vYYYY.M.PATCH-beta.N, or fallback correction tag vYYYY.M.PATCH-N; found "${releaseTag || "<missing>"}".`,
+      `Release tag must match (v|mb)YYYY.M.PATCH, (v|mb)YYYY.M.PATCH-alpha.N, (v|mb)YYYY.M.PATCH-beta.N, or fallback correction tag (v|mb)YYYY.M.PATCH-N; found "${releaseTag || "<missing>"}".`,
     );
   }
 

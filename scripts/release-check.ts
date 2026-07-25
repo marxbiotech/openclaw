@@ -903,14 +903,15 @@ function runPackedCliSmoke(params: {
 function runPackedBundledChannelEntrySmoke(): void {
   const tmpRoot = mkdtempSync(join(tmpdir(), "openclaw-release-pack-smoke-"));
   try {
-    const expectedVersion = (
-      JSON.parse(readFileSync(resolve("package.json"), "utf8")) as {
-        version?: string;
-      }
-    ).version;
+    const rootPackageJson = JSON.parse(readFileSync(resolve("package.json"), "utf8")) as {
+      name?: string;
+      version?: string;
+    };
+    const expectedVersion = rootPackageJson.version;
     if (!expectedVersion) {
       throw new Error("release-check: root package.json is missing version.");
     }
+    const packageName = rootPackageJson.name ?? "openclaw";
     const packDir = join(tmpRoot, "pack");
     mkdirSync(packDir);
 
@@ -920,7 +921,7 @@ function runPackedBundledChannelEntrySmoke(): void {
     const localPackageTarballs = resolveReleaseCheckLocalPackageTarballs();
     installPackedTarball(prefixDir, tarballPath, tmpRoot, localPackageTarballs);
 
-    const packageRoot = join(prefixDir, "node_modules", "openclaw");
+    const packageRoot = join(prefixDir, "node_modules", ...packageName.split("/"));
     verifyPackedInstalledPackage({
       expectedVersion,
       packageRoot,
