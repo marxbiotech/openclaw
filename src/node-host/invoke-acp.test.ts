@@ -34,7 +34,9 @@ function createMockClient(): { client: GatewayClient; events: CapturedEvent[] } 
 async function flush(): Promise<void> {
   // handleAcpEvent uses `void handleSpawn(...)` (fire-and-forget).
   // Flush the microtask queue so the async function completes.
-  await new Promise((r) => setTimeout(r, 50));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 50);
+  });
 }
 
 describe("resolveAcpNodeSpawnInvocation", () => {
