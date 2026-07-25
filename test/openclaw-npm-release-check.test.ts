@@ -737,7 +737,7 @@ describe("collectReleaseTagErrors", () => {
       }),
     ).toStrictEqual([
       'package.json version must match YYYY.M.PATCH, YYYY.M.PATCH-N, YYYY.M.PATCH-alpha.N, or YYYY.M.PATCH-beta.N; found "2026.3.0".',
-      'Release tag must match vYYYY.M.PATCH, vYYYY.M.PATCH-alpha.N, vYYYY.M.PATCH-beta.N, or fallback correction tag vYYYY.M.PATCH-N; found "v2026.3.0".',
+      'Release tag must match (v|mb)YYYY.M.PATCH, (v|mb)YYYY.M.PATCH-alpha.N, (v|mb)YYYY.M.PATCH-beta.N, or fallback correction tag (v|mb)YYYY.M.PATCH-N; found "v2026.3.0".',
       "Release tag v2026.3.0 does not match package.json version 2026.3.0; expected v2026.3.0.",
     ]);
   });
@@ -808,7 +808,7 @@ describe("collectReleasePackageMetadataErrors", () => {
   it("validates the expected npm package metadata", () => {
     expect(
       collectReleasePackageMetadataErrors({
-        name: "openclaw",
+        name: "@marxbiotech/openclaw",
         description: "Multi-channel AI gateway with extensible messaging integrations",
         license: "MIT",
         repository: { url: "git+https://github.com/openclaw/openclaw.git" },
@@ -820,7 +820,7 @@ describe("collectReleasePackageMetadataErrors", () => {
   it("rejects node-llama-cpp as a peer dependency", () => {
     expect(
       collectReleasePackageMetadataErrors({
-        name: "openclaw",
+        name: "@marxbiotech/openclaw",
         description: "Multi-channel AI gateway with extensible messaging integrations",
         license: "MIT",
         repository: { url: "git+https://github.com/openclaw/openclaw.git" },
@@ -837,7 +837,7 @@ describe("collectReleasePackageMetadataErrors", () => {
   it("rejects node-llama-cpp as a direct runtime dependency", () => {
     expect(
       collectReleasePackageMetadataErrors({
-        name: "openclaw",
+        name: "@marxbiotech/openclaw",
         description: "Multi-channel AI gateway with extensible messaging integrations",
         license: "MIT",
         repository: { url: "git+https://github.com/openclaw/openclaw.git" },
@@ -850,7 +850,7 @@ describe("collectReleasePackageMetadataErrors", () => {
   it("rejects local fs-safe dependency specs for npm release", () => {
     expect(
       collectReleasePackageMetadataErrors({
-        name: "openclaw",
+        name: "@marxbiotech/openclaw",
         description: "Multi-channel AI gateway with extensible messaging integrations",
         license: "MIT",
         repository: { url: "git+https://github.com/openclaw/openclaw.git" },
@@ -865,7 +865,7 @@ describe("collectReleasePackageMetadataErrors", () => {
   it("rejects node-llama-cpp as an optional dependency", () => {
     expect(
       collectReleasePackageMetadataErrors({
-        name: "openclaw",
+        name: "@marxbiotech/openclaw",
         description: "Multi-channel AI gateway with extensible messaging integrations",
         license: "MIT",
         repository: { url: "git+https://github.com/openclaw/openclaw.git" },
