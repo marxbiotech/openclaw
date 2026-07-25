@@ -465,8 +465,14 @@ export function writePackedTarballInstallManifest(
       `release-check: packed install accepts at most one @openclaw/ai tarball; found ${localPackageTarballs.length}.`,
     );
   }
+  // The dependency key must match the packed package's real name
+  // (@marxbiotech/openclaw on the mb* fork); an "openclaw" alias would
+  // install it at node_modules/openclaw and break packageRoot verification.
+  const rootPackageName =
+    (JSON.parse(readFileSync(resolve("package.json"), "utf8")) as { name?: string }).name ??
+    "openclaw";
   const dependencies: Record<string, string> = {
-    openclaw: pathToFileURL(tarballPath).href,
+    [rootPackageName]: pathToFileURL(tarballPath).href,
   };
   if (localPackageTarballs[0]) {
     dependencies["@openclaw/ai"] = pathToFileURL(localPackageTarballs[0]).href;
@@ -1246,8 +1252,16 @@ export function collectCriticalPluginSdkEntrypointSizeErrors(rootDir = process.c
 }
 
 function runCriticalPluginSdkEntrypointImportSmoke() {
+  // Node self-reference imports resolve via package.json "name", which the
+  // mb* fork renames to @marxbiotech/openclaw.
+  const rootPackageName =
+    (JSON.parse(readFileSync(resolve("package.json"), "utf8")) as { name?: string }).name ??
+    "openclaw";
+  const specifiers = CRITICAL_PLUGIN_SDK_IMPORT_SMOKE_SPECIFIERS.map((specifier) =>
+    specifier.replace(/^openclaw\//, `${rootPackageName}/`),
+  );
   const script = [
-    `const specifiers = ${JSON.stringify(CRITICAL_PLUGIN_SDK_IMPORT_SMOKE_SPECIFIERS)};`,
+    `const specifiers = ${JSON.stringify(specifiers)};`,
     `const importModule = new Function("specifier", "return imp" + "ort(specifier)");`,
     "for (const specifier of specifiers) {",
     "  await importModule(specifier);",

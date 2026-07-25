@@ -43,7 +43,10 @@ function collectExcludedDistExtensionIds() {
 }
 
 function packageRootLooksInstalled(root) {
-  return root.replaceAll("\\", "/").endsWith("/node_modules/openclaw");
+  // Match both bare and scoped installed layouts (node_modules/openclaw,
+  // node_modules/@marxbiotech/openclaw) so installed runs resolve their
+  // flat-installed dependencies instead of re-wrapping into a temp layout.
+  return /\/node_modules\/(@[^/]+\/)?[^/]+$/u.test(root.replaceAll("\\", "/"));
 }
 
 function smokeInInstalledLayoutIfNeeded() {
