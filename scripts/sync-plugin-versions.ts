@@ -118,7 +118,13 @@ export function syncPluginVersions(
   const changelogged: string[] = [];
   const skipped: string[] = [];
 
+  // Fork releases pin @openclaw/ai to the published upstream artifact, so its
+  // version intentionally trails the fork's own prerelease version.
+  const forkAiRegistryPin = process.env.OPENCLAW_FORK_AI_REGISTRY_PIN === "1";
   for (const packageDir of VERSION_ALIGNED_PACKAGE_DIRS) {
+    if (forkAiRegistryPin) {
+      continue;
+    }
     const packagePath = join(rootDir, packageDir, "package.json");
     if (!existsSync(packagePath)) {
       continue;
