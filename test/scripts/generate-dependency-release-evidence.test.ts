@@ -144,20 +144,50 @@ describe("generate-dependency-release-evidence", () => {
     const artifactArgs = ["--output-dir", "evidence", ...requiredArgs];
     const duplicateCases = [
       ["--root", ["--root", "repo-a", "--root", "repo-b", ...artifactArgs]],
-      ["--output-dir", ["--output-dir", "evidence-a", "--output-dir", "evidence-b", ...requiredArgs]],
+      [
+        "--output-dir",
+        ["--output-dir", "evidence-a", "--output-dir", "evidence-b", ...requiredArgs],
+      ],
       [
         "--release-ref",
-        ["--output-dir", "evidence", "--release-ref", "v2026.5.13", "--release-ref", "v2026.5.14", "--npm-dist-tag", "latest"],
+        [
+          "--output-dir",
+          "evidence",
+          "--release-ref",
+          "v2026.5.13",
+          "--release-ref",
+          "v2026.5.14",
+          "--npm-dist-tag",
+          "latest",
+        ],
       ],
       [
         "--npm-dist-tag",
-        ["--output-dir", "evidence", "--release-ref", "v2026.5.13", "--npm-dist-tag", "latest", "--npm-dist-tag", "beta"],
+        [
+          "--output-dir",
+          "evidence",
+          "--release-ref",
+          "v2026.5.13",
+          "--npm-dist-tag",
+          "latest",
+          "--npm-dist-tag",
+          "beta",
+        ],
       ],
       ["--base-ref", [...artifactArgs, "--base-ref", "origin/main", "--base-ref", "HEAD~1"]],
-      ["--github-output", [...artifactArgs, "--github-output", "first.out", "--github-output", "second.out"]],
+      [
+        "--github-output",
+        [...artifactArgs, "--github-output", "first.out", "--github-output", "second.out"],
+      ],
       [
         "--github-step-summary",
-        [...artifactArgs, "--github-step-summary", "first.md", "--github-step-summary", "second.md"],
+        [
+          ...artifactArgs,
+          "--github-step-summary",
+          "first.md",
+          "--github-step-summary",
+          "second.md",
+        ],
       ],
     ] satisfies Array<[string, string[]]>;
 
@@ -212,6 +242,33 @@ describe("generate-dependency-release-evidence", () => {
     ).toBe("v2026.5.1");
     expect(calls.map(({ args }) => args[0])).toEqual(["describe", "fetch", "describe"]);
     expect(calls[1].args).toEqual(["fetch", "--tags", "--force", "origin"]);
+  });
+
+  it("matches upstream and fork tags when resolving the previous release", () => {
+    let describeArgs: string[] = [];
+    const execFileSyncImpl = (command: string, args: string[] = []) => {
+      expect(command).toBe("git");
+      describeArgs = args;
+      return "mb2026.7.1-beta.3\n";
+    };
+
+    expect(
+      resolvePreviousReleaseTag({
+        rootDir: "/repo",
+        execFileSyncImpl,
+        fetchOnMiss: false,
+      }),
+    ).toBe("mb2026.7.1-beta.3");
+    expect(describeArgs).toEqual([
+      "describe",
+      "--tags",
+      "--match",
+      "v[0-9]*.[0-9]*.[0-9]*",
+      "--match",
+      "mb[0-9]*.[0-9]*.[0-9]*",
+      "--abbrev=0",
+      "HEAD^",
+    ]);
   });
 
   it("collects report counts and renders human summaries", async () => {

@@ -40,7 +40,7 @@ export const DEPENDENCY_EVIDENCE_REPORTS = [
   },
 ];
 
-const RELEASE_TAG_PATTERN = "v[0-9]*.[0-9]*.[0-9]*";
+const RELEASE_TAG_PATTERNS = ["v[0-9]*.[0-9]*.[0-9]*", "mb[0-9]*.[0-9]*.[0-9]*"];
 
 function trimOutput(output) {
   return String(output).trim();
@@ -95,8 +95,7 @@ export function resolvePreviousReleaseTag({
   const describeArgs = [
     "describe",
     "--tags",
-    "--match",
-    RELEASE_TAG_PATTERN,
+    ...RELEASE_TAG_PATTERNS.flatMap((pattern) => ["--match", pattern]),
     "--abbrev=0",
     "HEAD^",
   ];
