@@ -5,6 +5,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import { gunzipSync, inflateSync, brotliDecompressSync } from "node:zlib";
 import { readBoundedResponseText as readBoundedResponseTextWithLimit } from "../lib/bounded-response.mjs";
 
 const DEFAULT_REGISTRY = "https://registry.npmjs.org";
@@ -800,16 +801,68 @@ export async function readBoundedBulkAdvisoryErrorText(
 }
 
 async function readBulkAdvisoryJson(response, maxBytes, options = {}) {
-  const text = await readBoundedResponseText(
+  const buf = await readBoundedResponseBuffer(
     response,
     maxBytes,
     "Bulk advisory response body",
     options,
   );
+  if (buf.length === 0) {
+    throw new Error("Bulk advisory response body was empty");
+  }
+  // The npm bulk-advisory endpoint (fronted by Cloudflare) may return
+  // gzip/deflate/br-encoded bytes even when the request advertised
+  // Accept-Encoding: identity and even without a Content-Encoding response
+  // header. Sniff the magic bytes and inflate before JSON.parse so the gate
+  // does not spuriously fail with "Unexpected token '\x1f'".
+  let bodyBytes = buf;
+  const encoding = (response.headers.get("content-encoding") || "").toLowerCase();
+  try {
+    if (encoding === "gzip" || (buf.length >= 2 && buf[0] === 0x1f && buf[1] === 0x8b)) {
+      bodyBytes = gunzipSync(buf);
+    } else if (encoding === "br") {
+      bodyBytes = brotliDecompressSync(buf);
+    } else if (encoding === "deflate") {
+      bodyBytes = inflateSync(buf);
+    }
+  } catch (err) {
+    throw new Error(
+      `Bulk advisory response body could not be decompressed (encoding=${encoding || "none"}): ${err.message}`,
+    );
+  }
+  const text = bodyBytes.toString("utf8");
   if (!text.trim()) {
     throw new Error("Bulk advisory response body was empty");
   }
   return JSON.parse(text);
+}
+
+async function readBoundedResponseBuffer(response, maxBytes, label, options = {}) {
+  if (!response.body) {
+    return Buffer.alloc(0);
+  }
+  const reader = response.body.getReader();
+  const chunks = [];
+  let totalBytes = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalBytes += value.byteLength;
+      if (totalBytes > maxBytes) {
+        await reader.cancel().catch(() => undefined);
+        throw Object.assign(new Error(`${label} exceeded ${maxBytes} bytes`), { code: "ETOOBIG" });
+      }
+      chunks.push(Buffer.from(value.buffer, value.byteOffset, value.byteLength));
+    }
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {
+      // ignore
+    }
+  }
+  return Buffer.concat(chunks, totalBytes);
 }
 
 export async function fetchBulkAdvisories({
