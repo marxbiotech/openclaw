@@ -6,7 +6,6 @@ import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { gunzipSync, inflateSync, brotliDecompressSync } from "node:zlib";
-import { readBoundedResponseText as readBoundedResponseTextWithLimit } from "../lib/bounded-response.mjs";
 
 const DEFAULT_REGISTRY = "https://registry.npmjs.org";
 const BULK_ADVISORY_PATH = "/-/npm/v1/security/advisories/bulk";
@@ -737,15 +736,6 @@ async function withBulkAdvisoryTimeout({ label, timeoutMs, run }) {
   }
 }
 
-async function readBoundedResponseText(response, maxBytes, label, options = {}) {
-  return await readBoundedResponseTextWithLimit(response, label, maxBytes, {
-    signal: options.signal,
-    timeoutPromise: options.timeoutPromise,
-    formatTooLargeMessage: (messageLabel, bytes) => `${messageLabel} exceeded ${bytes} bytes`,
-    createTooLargeError: (message) => Object.assign(new Error(message), { code: "ETOOBIG" }),
-  });
-}
-
 export async function readBoundedBulkAdvisoryErrorText(
   response,
   maxChars = BULK_ADVISORY_ERROR_BODY_MAX_CHARS,
@@ -828,6 +818,7 @@ async function readBulkAdvisoryJson(response, maxBytes, options = {}) {
   } catch (err) {
     throw new Error(
       `Bulk advisory response body could not be decompressed (encoding=${encoding || "none"}): ${err.message}`,
+      { cause: err },
     );
   }
   const text = bodyBytes.toString("utf8");
@@ -837,7 +828,7 @@ async function readBulkAdvisoryJson(response, maxBytes, options = {}) {
   return JSON.parse(text);
 }
 
-async function readBoundedResponseBuffer(response, maxBytes, label, options = {}) {
+async function readBoundedResponseBuffer(response, maxBytes, label, _options = {}) {
   if (!response.body) {
     return Buffer.alloc(0);
   }
@@ -847,7 +838,9 @@ async function readBoundedResponseBuffer(response, maxBytes, label, options = {}
   try {
     for (;;) {
       const { done, value } = await reader.read();
-      if (done) break;
+      if (done) {
+        break;
+      }
       totalBytes += value.byteLength;
       if (totalBytes > maxBytes) {
         await reader.cancel().catch(() => undefined);
