@@ -135,12 +135,23 @@ function isAbsoluteImportPath(value: string): boolean {
   return path.isAbsolute(value) || /^[A-Za-z]:[\\/]/.test(value);
 }
 
+function decodeTypeScriptUnicodeEscapes(value: string): string {
+  return value.replaceAll(
+    /(?<!\\)\\u(?:\{([0-9A-Fa-f]{1,6})\}|([0-9A-Fa-f]{4}))/g,
+    (match, braced: string | undefined, fixed: string | undefined) => {
+      const codePoint = Number.parseInt(braced ?? fixed ?? "", 16);
+      return codePoint <= 0x10ffff ? String.fromCodePoint(codePoint) : match;
+    },
+  );
+}
+
 function normalizeDeclarationImportSpecifier(repoRoot: string, value: string): string {
-  if (!isAbsoluteImportPath(value)) {
+  const decodedValue = decodeTypeScriptUnicodeEscapes(value);
+  if (!isAbsoluteImportPath(decodedValue)) {
     return value;
   }
 
-  const resolvedPath = path.resolve(value);
+  const resolvedPath = path.resolve(decodedValue);
   const relative = path.relative(repoRoot, resolvedPath);
   if (relative.startsWith("..") || path.isAbsolute(relative)) {
     return value;

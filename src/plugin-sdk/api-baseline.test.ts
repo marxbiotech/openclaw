@@ -22,6 +22,23 @@ describe("Plugin SDK API baseline", () => {
     );
   });
 
+  it("normalizes TypeScript-escaped Unicode import paths", () => {
+    const repoRoot = path.join(path.sep, "Volumes", "湯圓真可愛", "Workspace", "openclaw");
+    const escapedPath = path
+      .join(repoRoot, "src", "agents", "agent-model-discovery")
+      .replace(
+        /[^\x00-\x7F]/g,
+        (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
+      );
+    const declaration = `export type AgentDiscoveryModule = typeof import("${escapedPath}");`;
+
+    const normalized = normalizePluginSdkApiDeclarationText(repoRoot, declaration);
+
+    expect(normalized).toBe(
+      'export type AgentDiscoveryModule = typeof import("src/agents/agent-model-discovery");',
+    );
+  });
+
   it("normalizes dependency source paths to stable node_modules paths", () => {
     const repoRoot = path.join(path.sep, "workspace", "openclaw-worktree");
     const linkedDependencyPath = path.join(
