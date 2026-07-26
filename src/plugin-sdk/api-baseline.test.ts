@@ -27,7 +27,7 @@ describe("Plugin SDK API baseline", () => {
     const escapedPath = path
       .join(repoRoot, "src", "agents", "agent-model-discovery")
       .replace(
-        /[^\x00-\x7F]/g,
+        /[^\p{ASCII}]/gu,
         (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
       );
     const declaration = `export type AgentDiscoveryModule = typeof import("${escapedPath}");`;
