@@ -1,6 +1,6 @@
 {
   "name": "@marxbiotech/openclaw",
-  "version": "2026.7.1-beta.5",
+  "version": "2026.7.1-beta.6",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/marxbiotech/openclaw#readme",
@@ -2050,7 +2050,7 @@
   },
   "devDependencies": {
     "@a2ui/lit": "0.10.1",
-    "@copilotkit/aimock": "1.35.0",
+    "@copilotkit/aimock": "1.37.2",
     "@grammyjs/types": "3.28.0",
     "@lit-labs/signals": "0.3.0",
     "@lit/context": "1.1.6",
@@ -2065,7 +2065,7 @@
     "@types/proper-lockfile": "4.1.4",
     "@types/ws": "8.18.1",
     "@typescript/native-preview": "7.0.0-dev.20260704.1",
-    "@vitest/coverage-v8": "4.1.9",
+    "@vitest/coverage-v8": "4.1.10",
     "esbuild": "0.28.1",
     "jscpd": "4.2.4",
     "jsdom": "29.1.1",
@@ -2079,7 +2079,7 @@
     "tsdown": "0.22.1",
     "tsx": "4.22.4",
     "unrun": "0.3.1",
-    "vitest": "4.1.9"
+    "vitest": "4.1.10"
   },
   "optionalDependencies": {
     "sqlite-vec": "0.1.9"
