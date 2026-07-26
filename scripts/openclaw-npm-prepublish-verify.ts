@@ -104,12 +104,21 @@ function main(argv = process.argv.slice(2)): void {
     let packageRoot: string;
     if (usesPreparedLocalDependencyInstall(args.dependencyTarballPaths.length)) {
       const aiTarballPath = realpathSync(args.dependencyTarballPaths[0]);
+      const rootManifest = readTarballJson(args.tarballPath, "package/package.json");
       assertPreparedOpenClawNpmShrinkwrap({
         aiIntegrity: npmTarballIntegrity(aiTarballPath),
         aiManifest: readTarballJson(aiTarballPath, "package/package.json"),
-        rootManifest: readTarballJson(args.tarballPath, "package/package.json"),
+        rootManifest,
         shrinkwrap: readTarballJson(args.tarballPath, "package/npm-shrinkwrap.json"),
       });
+      // The dependency key must match the packed package's real name
+      // (@marxbiotech/openclaw on the mb* fork); an "openclaw" alias would
+      // install it at node_modules/openclaw and break flat dependency
+      // resolution against the packed shrinkwrap.
+      const rootPackageName =
+        typeof rootManifest.name === "string" && rootManifest.name.trim() !== ""
+          ? rootManifest.name.trim()
+          : "openclaw";
       mkdirSync(prefixDir, { recursive: true });
       writeFileSync(
         join(prefixDir, "package.json"),
@@ -118,7 +127,7 @@ function main(argv = process.argv.slice(2)): void {
             private: true,
             dependencies: {
               "@openclaw/ai": pathToFileURL(aiTarballPath).href,
-              openclaw: pathToFileURL(realpathSync(args.tarballPath)).href,
+              [rootPackageName]: pathToFileURL(realpathSync(args.tarballPath)).href,
             },
           },
           null,
@@ -126,7 +135,7 @@ function main(argv = process.argv.slice(2)): void {
         )}\n`,
       );
       npmExec(["install", "--prefix", prefixDir, "--no-fund", "--no-audit"], workingDir);
-      packageRoot = join(prefixDir, "node_modules", "openclaw");
+      packageRoot = join(prefixDir, "node_modules", rootPackageName);
       const binaryPath = join(
         prefixDir,
         "node_modules",

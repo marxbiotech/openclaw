@@ -8,6 +8,32 @@ import { pathToFileURL } from "node:url";
 
 const AI_PACKAGE_NAME = "@openclaw/ai";
 const AI_LOCK_PATH = "node_modules/@openclaw/ai";
+// Fork releases pin the upstream-published @openclaw/ai artifact instead of
+// publishing their own copy; the pin uses the npm registry's own integrity so
+// installs verify against the artifact npm actually serves.
+const FORK_AI_REGISTRY_PIN_ENV = "OPENCLAW_FORK_AI_REGISTRY_PIN";
+
+function forkAiRegistryPinEnabled(): boolean {
+  return process.env[FORK_AI_REGISTRY_PIN_ENV] === "1";
+}
+
+const registryIntegrityCache = new Map<string, string>();
+
+function registryIntegrity(packageName: string, version: string): string {
+  const spec = `${packageName}@${version}`;
+  const cached = registryIntegrityCache.get(spec);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const output = execFileSync("npm", ["view", spec, "dist.integrity"], {
+    encoding: "utf8",
+  }).trim();
+  if (!output.startsWith("sha512-")) {
+    throw new Error(`npm registry integrity unavailable for ${spec}`);
+  }
+  registryIntegrityCache.set(spec, output);
+  return output;
+}
 
 type JsonObject = Record<string, unknown>;
 
@@ -70,10 +96,13 @@ export function prepareOpenClawNpmShrinkwrap(params: {
   if (aiName !== AI_PACKAGE_NAME) {
     throw new Error(`AI package name must be ${AI_PACKAGE_NAME}, found ${aiName}`);
   }
-  if (aiVersion !== rootVersion) {
+  if (aiVersion !== rootVersion && !forkAiRegistryPinEnabled()) {
     throw new Error(`AI package version ${aiVersion} does not match OpenClaw ${rootVersion}`);
   }
-  if (!params.aiIntegrity.startsWith("sha512-")) {
+  const aiIntegrity = forkAiRegistryPinEnabled()
+    ? registryIntegrity(AI_PACKAGE_NAME, aiVersion)
+    : params.aiIntegrity;
+  if (!aiIntegrity.startsWith("sha512-")) {
     throw new Error("AI package integrity must use sha512");
   }
   if (params.shrinkwrap.lockfileVersion !== 3) {
@@ -105,7 +134,7 @@ export function prepareOpenClawNpmShrinkwrap(params: {
 
   rootDependencies[AI_PACKAGE_NAME] = aiVersion;
   packages[AI_LOCK_PATH] = expectedAiLockEntry({
-    aiIntegrity: params.aiIntegrity,
+    aiIntegrity,
     aiManifest: params.aiManifest,
     aiVersion,
   });
