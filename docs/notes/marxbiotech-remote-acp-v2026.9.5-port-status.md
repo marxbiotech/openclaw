@@ -135,6 +135,23 @@ Cancellation of admitted work does not prompt again. ACP harness permission
 mode is independent and does not grant OpenClaw execution authority. No fake
 Full authority, scope elevation, or standing approval cache is introduced.
 
-Keep both PRs in draft until the intended verification is complete and a matching
-base image is built and pinned in the application image. The application still
-pins the legacy release image; publishing and deployment are separate work.
+The matching base image is published as
+`ghcr.io/marxbiotech/openclaw:mb2026.9.5-beta.1`, from commit
+`a0a4195f4fdf7f16f462be64de03ef03c543f044`. Its multi-platform digest is
+`sha256:ee87d4825e728897cd928ff16eabb897b3d5067dfc8522d9265bf378dfb91d49`.
+The [image release run](https://github.com/marxbiotech/openclaw/actions/runs/35694345546)
+passed native amd64 and arm64 runtime checks for the host version, source commit,
+public backend SDK, and image attestations. Registry readback confirms both
+architectures and the source identity. The host package version remains
+`2026.9.5`; the image tag identifies the fork's beta release.
+
+The fork-specific `marxbiotech-docker-release.yml` workflow publishes lightweight
+`mbYYYY.M.D-beta.N` tags to GHCR. It retains the `docker-release` environment,
+publishes the multi-platform version tag only after both architecture checks,
+and refuses to overwrite an existing version tag.
+
+The application Dockerfile now pins this base. Its image tags derive from the
+OpenClaw image version plus the application commit, and its Docker build checks
+actual remote-acpx registration and worker imports as the non-root runtime user.
+Both PRs remain draft for deployment review. Publishing these images does not
+upgrade existing Gateways, paired nodes, or live data.
