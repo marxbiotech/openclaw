@@ -8,6 +8,10 @@
       "types": "./dist/src/plugin-sdk/account-id.d.ts",
       "default": "./src/account-id.ts"
     },
+    "./acp-backend": {
+      "types": "./dist/src/plugin-sdk/acp-backend.d.ts",
+      "default": "./src/acp-backend.ts"
+    },
     "./acp-runtime": {
       "types": "./dist/src/plugin-sdk/acp-runtime.d.ts",
       "default": "./src/acp-runtime.ts"

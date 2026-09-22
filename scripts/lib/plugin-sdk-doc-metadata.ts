@@ -12,6 +12,9 @@ type PluginSdkDocMetadata = {
 };
 
 export const pluginSdkDocMetadata = {
+  "acp-backend": {
+    category: "runtime",
+  },
   "control-ui-link-reader": {
     category: "core",
   },

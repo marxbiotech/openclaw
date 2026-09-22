@@ -198,7 +198,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
   const budgets = {
     publicEntrypoints: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS",
-      151,
+      // +1: ACP execution-backend registration without owning the control plane.
+      152,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -216,7 +217,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // -8: retired Skill Workshop proposal hook types.
       // +3: approved async session entry reads and typed incognito refusal on the existing subpath.
       // +1: deprecated createSessionHeaderLink retained from shipped 2026.10.1.
-      3645,
+      // +22: ACP execution-backend registration contract and its runtime types.
+      3667,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -231,7 +233,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: approved async upstream-link writes with released sync compatibility.
       // +3: approved async session entry reads and typed incognito refusal on the existing subpath.
       // +1: the same deprecated createSessionHeaderLink.
-      2115,
+      // +5: ACP backend registration, lookup, error guard, and reply-hook dispatch.
+      2120,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
