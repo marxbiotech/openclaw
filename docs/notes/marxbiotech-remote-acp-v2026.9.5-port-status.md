@@ -163,14 +163,14 @@ One-shot runs close their native harness session. The skill requires full prior
 context for later work and does not promise native continuity by reusing a
 completed run's key. Persistent context uses a supported ACP child thread.
 Image smoke checks verify the skill is eligible, model-visible, and not a
-user-invocable slash command. These authorization and skill changes require a
-new matching host/application release; the beta.1 images below predate them.
+user-invocable slash command. The beta.2 host/application images below include
+the authorization capability and packaged skill; beta.1 predates them.
 
 The matching base image is published as
-`ghcr.io/marxbiotech/openclaw:mb2026.9.5-beta.1`, from commit
-`a0a4195f4fdf7f16f462be64de03ef03c543f044`. Its multi-platform digest is
-`sha256:ee87d4825e728897cd928ff16eabb897b3d5067dfc8522d9265bf378dfb91d49`.
-The [image release run](https://github.com/marxbiotech/openclaw/actions/runs/35694345546)
+`ghcr.io/marxbiotech/openclaw:mb2026.9.5-beta.2`, from commit
+`3e458dbc5b912d8363ec5862d164949e2e379651`. Its multi-platform digest is
+`sha256:d6265781a4d44ad2babbd54982d1591ff1822ffe8cc46675bf4b6de8193b69cc`.
+The [image release run](https://github.com/marxbiotech/openclaw/actions/runs/35712885442)
 passed native amd64 and arm64 runtime checks for the host version, source commit,
 public backend SDK, and image attestations. Registry readback confirms both
 architectures and the source identity. The host package version remains
@@ -183,16 +183,29 @@ and refuses to overwrite an existing version tag.
 
 The application Dockerfile now pins this base. Its image tags derive from the
 OpenClaw image version plus the application commit, and its Docker build checks
-actual remote-acpx registration and worker imports as the non-root runtime user.
-The application image containing the first-session lifecycle fix is published as
-`ghcr.io/marxbiotech/moltbot-app:mb2026.9.5-beta.1-3b85179`, with multi-platform
-digest `sha256:8256fc28b272dc0f4683ec1c855f2039dcefb756d8d1b9e42dc6ed46b6c5e804`.
-The [application image run](https://github.com/marxbiotech/moltbot-app/actions/runs/35706055842)
-passed native amd64 and arm64 checks. Registry readback confirms both variants
+actual remote-acpx registration, skill discovery, and worker imports as the
+non-root runtime user. The application image is published as
+`ghcr.io/marxbiotech/moltbot-app:mb2026.9.5-beta.2-667b525`, from commit
+`667b5253d564524a01c2abd147b16d4c3dea6f2b`, with multi-platform digest
+`sha256:f747fc92d8c87191cb18c67de3136c8a217680efde3f9a69e20429b2a10bb2bd`.
+The [application image run](https://github.com/marxbiotech/moltbot-app/actions/runs/35715406009)
+passed amd64 and arm64 checks. Registry readback confirms both variants
 retain the corresponding pinned OpenClaw base layers.
 
-On 2026-09-22, this published image ran in an isolated ARM64 Kubernetes Pod,
-paired with a temporary node process on a physical macOS host. Cross-machine
+On 2026-09-22, the beta.2 application image passed the agent-owned path in an
+isolated ARM64 Kubernetes Pod, paired with a temporary node on a physical macOS
+host. A deterministic Gateway model peer read the image's packaged skill and
+called the actual `sessions_spawn` tool. Real Claude then created a requested
+file in the node's temporary workspace, and the core delivered completion to
+the coordinating agent. The child transcript, exact file contents, parent reply,
+and absence of per-operation approvals were verified. Provider login stayed in
+the temporary node process environment. The image pulled in about 87 seconds.
+The same configured-policy path also passed local isolated Claude reply and
+file-write runs; their temporary state was removed with no process retaining the
+test working directories.
+
+Earlier beta.1 verification used the same isolated Kubernetes/macOS topology.
+Cross-machine
 checks passed for approvals, cwd, streaming, persisted follow-up, the silent
 35-second turn, cancellation, elicitation, and canonical manager admission.
 Two real Claude turns also passed through `chat.send`, `agent.wait`, the
