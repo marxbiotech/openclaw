@@ -153,5 +153,5 @@ and refuses to overwrite an existing version tag.
 The application Dockerfile now pins this base. Its image tags derive from the
 OpenClaw image version plus the application commit, and its Docker build checks
 actual remote-acpx registration and worker imports as the non-root runtime user.
-Both PRs remain draft for deployment review. Publishing these images does not
-upgrade existing Gateways, paired nodes, or live data.
+Deployment validation remains separate from image publication. Publishing these
+images does not upgrade existing Gateways, paired nodes, or live data.
