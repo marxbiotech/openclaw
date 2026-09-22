@@ -142,6 +142,7 @@
   "process-runtime",
   "worker-task-server",
   "windows-spawn",
+  "acp-backend",
   "acp-runtime",
   "acp-runtime-backend",
   "acp-binding-runtime",
