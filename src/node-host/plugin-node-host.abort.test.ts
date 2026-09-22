@@ -74,6 +74,7 @@ describe("non-duplex node-host plugin cancellation", () => {
       sessionKey: "agent:main:local-model",
       signal: controller.signal,
       prepareExecAuthorization: expect.any(Function),
+      prepareConfiguredExecAuthorization: expect.any(Function),
     });
     expect(request).not.toHaveBeenCalled();
   });
@@ -109,6 +110,7 @@ describe("non-duplex node-host plugin cancellation", () => {
     expect(handle).toHaveBeenCalledWith("{}", undefined, {
       sendNodeEvent,
       prepareExecAuthorization: expect.any(Function),
+      prepareConfiguredExecAuthorization: expect.any(Function),
     });
     expect(request).toHaveBeenCalledWith(
       "node.invoke.result",

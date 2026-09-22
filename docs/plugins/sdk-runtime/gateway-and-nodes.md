@@ -169,6 +169,26 @@ Reach the Gateway and paired nodes from plugin code, and the events a long-lived
 
     `allow-always` remains one policy decision unless the node-invoke policy explicitly declares `standingApproval: { kind: "placement", scope: "<capability>" }`. That opt-in permits later launches only for a high-risk command on the same current managed placement, node pairing, environment owner, workspace, and semantic capability scope, for at most 30 days and never across Gateway restart. Use a stable, content-free scope for a capability whose approval deliberately covers later argument changes. Do not opt in when the approved target or other request arguments must remain exact.
 
+    Node command handlers that launch processes must also check node-local exec
+    policy. For an explicit human decision or host-admitted Session Full launch,
+    use `context.prepareExecAuthorization("human-approved" | "session-full")`.
+    For operator-configured unattended execution, use the separate optional
+    `context.prepareConfiguredExecAuthorization()` capability. It requires the
+    invocation agent's effective node-local `security: "full"`, `ask: "off"`,
+    and the canonical exec-approvals floor to permit that policy. A Gateway
+    plugin must separately authorize its exact node command and target through
+    its node-invoke policy; this capability does not grant Gateway permission,
+    Session Full, or a placement standing approval.
+
+    Both preparers return a synchronous guard. Call it immediately before each
+    process launch or use of a retained worker, after asynchronous preparation.
+    The guard rechecks the current node policy, approvals floor, plugin owner,
+    and invocation lifetime. Neither a guard nor its preparer may be reused
+    after that invocation completes or is canceled. Prepare a fresh guard for
+    each later invocation. If an older node host omits
+    `prepareConfiguredExecAuthorization`, fail closed with an upgrade message;
+    never substitute a human decision or Session Full source.
+
     A node command may declare `prepare(context)` for asynchronous native startup.
     Node-host initialization awaits it before publishing the initial manifest or
     connecting to the Gateway; plugin registration itself stays synchronous.

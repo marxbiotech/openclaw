@@ -255,6 +255,13 @@ export async function invokeRegisteredNodeHostCommand(
             sessionKey: context.sessionKey,
             assertActive,
           }),
+        prepareConfiguredExecAuthorization: () =>
+          preparePluginExecAuthorization({
+            source: "configured-policy",
+            command,
+            sessionKey: context.sessionKey,
+            assertActive,
+          }),
       }
     : undefined;
   try {

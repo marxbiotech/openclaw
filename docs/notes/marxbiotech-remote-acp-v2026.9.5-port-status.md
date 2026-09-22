@@ -42,12 +42,16 @@ node affinity, upstream duplex transport, node-owned workers using
 The legacy plugin tools, roster, event router, session manager, and job store
 are removed. Node execution currently supports macOS and Linux.
 
-One generic core addition is required: `openclaw/plugin-sdk/acp-backend` exposes
+The public `openclaw/plugin-sdk/acp-backend` contract exposes
 the canonical backend types, existing registry, errors, and lazy reply hook.
 The bundled ACPX plugin now consumes the same contract. The upstream
 `acp-runtime` and `process-runtime` facades are explicitly classified as private;
 the former being packaged does not make it a supported typed external API.
 The new plugin uses no private runtime facade.
+The node host also exposes an optional, closure-bound
+`prepareConfiguredExecAuthorization()` capability for operator-configured
+execution. It reuses the canonical node policy and approval floor; an older host
+without this capability rejects that mode.
 
 The previous note incorrectly said the ACP backend registry was introduced
 following v2026.7.1. Both the registry and backend SDK already existed, and the
@@ -78,8 +82,8 @@ design concerns transport, state ownership, and current runtime contracts.
    rules.
 
 One plugin package supplies both host roles. Core owns conversation/task state;
-the plugin owns execution adapters. The core change is limited to the demonstrated
-public backend-registration contract gap.
+the plugin owns execution adapters. Core changes supply the public backend
+registration contract and a generic configured execution guard.
 
 Relevant upstream contracts:
 
@@ -116,11 +120,14 @@ with node-owned execution records and reconciliation.
 - The focused SDK and migrated bundled ACPX tests pass (15 tests), and the SDK
   TypeScript test shard passes.
 - The plugin typechecks against the built fork and its process/integration tests
-  pass (29 tests). They exercise actual acpx against a synthetic ACP harness,
+  pass (34 tests). They exercise actual acpx against a synthetic ACP harness,
   including registered plugin routing, persisted follow-up, explicit and signal
   cancellation, elicitation, ownership, stale handles, and descendant cleanup.
   Regressions cover providers that persist only on their first prompt, fresh
   execution authority when reusing a worker, and stale-close isolation.
+- The node-host contract tests pass (60 tests), including configured full/off
+  policy, the canonical approvals floor, owner-specific restrictions, guard
+  closure, and late policy changes. Core TypeScript and SDK export checks pass.
 - A clean production-only npm install succeeds without the sibling development
   checkout. The plugin needs the matching fork build at runtime.
 
@@ -134,11 +141,30 @@ sends a real `chat.send` turn, waits through `agent.wait`, and verifies the
 manager returns to idle with the prompt recorded by the node-local peer.
 Existing deployed Gateways/nodes and data are untouched.
 
-The current public node execution contract requires a real approval for every
-operation that starts or reuses a worker; this implementation requests Allow once.
+The default `executionApproval: "always"` requests Allow once for execution.
+Operators can select `node-policy` on the Gateway to authorize agent-driven
+execution on the current configured target. The node independently requires
+effective `security: "full"` and `ask: "off"` in its configuration and canonical
+approvals floor. Each spawn or retained-worker use gets a fresh live guard.
 Cancellation of admitted work does not prompt again. ACP harness permission
 mode is independent and does not grant OpenClaw execution authority. No fake
 Full authority, scope elevation, or standing approval cache is introduced.
+
+The plugin packages the model-visible `remote-acp-router` skill. A separate live
+proof uses a deterministic model peer with a real Gateway and paired node:
+the model reads that skill, calls `sessions_spawn(runtime="acp", mode="run")`,
+executes acpx on the node, and summarizes completion in the parent conversation
+with zero per-operation approvals. The ACP executor is registered in the current
+agent roster. This proves the actual agent-tool and parent-delivery path without
+requiring user slash commands; it does not measure a provider model's routing
+judgment. The original approval-based live proof still passes.
+
+One-shot runs close their native harness session. The skill requires full prior
+context for later work and does not promise native continuity by reusing a
+completed run's key. Persistent context uses a supported ACP child thread.
+Image smoke checks verify the skill is eligible, model-visible, and not a
+user-invocable slash command. These authorization and skill changes require a
+new matching host/application release; the beta.1 images below predate them.
 
 The matching base image is published as
 `ghcr.io/marxbiotech/openclaw:mb2026.9.5-beta.1`, from commit
