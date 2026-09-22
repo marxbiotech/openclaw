@@ -3,9 +3,15 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AcpSessionStoreEntry } from "../acp/runtime/session-meta.js";
 import { emitAcpLifecycleStart } from "../agents/command/attempt-execution.js";
+import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
+import { createSubagentRegistrationRecord } from "../agents/subagents/registry/subagent-registry-run-launch-record.js";
 import { startAcpSpawnParentStreamRelay } from "../agents/subagents/spawn/acp-spawn-parent-stream.js";
 import { resetCronActiveJobs } from "../cron/active-jobs.js";
-import { emitAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
+import {
+  emitAgentEvent,
+  getAgentEventLifecycleGeneration,
+  resetAgentEventsForTest,
+} from "../infra/agent-events.js";
 import { registerAgentRunContext } from "../infra/agent-run-registry.js";
 import {
   getGatewaySuspendStatus,
@@ -52,6 +58,7 @@ import {
 import { CRON_TASK_KIND } from "./cron-task-contract.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "./detached-task-runtime-contract.js";
 import { ensureTaskRuntimeStateReady } from "./runtime-internal.js";
+import { createSubagentTaskBackingDetail } from "./task-backing-authority.js";
 import { createAcpTaskBackingDetailForTest } from "./task-backing-authority.test-support.js";
 import {
   createTaskFlowForTask as createTaskFlowForTaskOrNull,
@@ -192,11 +199,7 @@ vi.mock("../utils/message-channel.js", () => ({
     channel === "slack",
 }));
 
-// Thread-addressed direct delivery requires the transport to declare capabilities.threads;
-// guildchat stays undeclared so tests can pin the deliverable-but-not-thread-capable fallback.
 vi.mock("../channels/thread-addressing.js", () => ({
-  channelSupportsThreadDelivery: (channel?: string | null) =>
-    channel === "discord" || channel === "slack",
   resolveChannelThreadAddressing: () => "address" as const,
 }));
 
@@ -2142,9 +2145,11 @@ describe("task-registry", () => {
         }),
       );
       expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
-      expect(peekSystemEvents("agent:main:main")).toEqual([
-        expect.stringContaining("Background task ready for review: ACP background task"),
-      ]);
+      await waitForAssertion(() =>
+        expect(peekSystemEvents("agent:main:main")).toEqual([
+          expect.stringContaining("Background task ready for review: ACP background task"),
+        ]),
+      );
       expect(peekSystemEvents("agent:main:main")[0]).not.toContain("Inspect:");
       expect(resolveTaskControlUiSessionUrl).not.toHaveBeenCalled();
     });
@@ -2193,21 +2198,27 @@ describe("task-registry", () => {
 
   it.each([
     {
-      name: "with an inspection link when the child session is linkable",
+      name: "failure with an inspection link when the child session is linkable",
+      phase: "error",
+      status: "failed",
       childSessionKey: "agent:worker:acp:child",
       inspectUrl: "https://dashboard.example/chat/agent%3Aworker%3Aacp%3Achild",
     },
     {
-      name: "without an inspection link when no public Control UI is configured",
+      name: "failure without an inspection link when no public Control UI is configured",
+      phase: "error",
+      status: "failed",
       childSessionKey: "agent:worker:acp:child",
       inspectUrl: undefined,
     },
     {
-      name: "without an inspection link when the task has no child session",
+      name: "success without an inspection link when the task has no child session",
+      phase: "end",
+      status: "succeeded",
       childSessionKey: undefined,
       inspectUrl: "https://dashboard.example/chat/unused",
     },
-  ])("delivers ACP completion directly to a requester thread $name", async (testCase) => {
+  ])("preserves direct requester-thread delivery for ACP $name", async (testCase) => {
     await withTaskRegistryTempDir(async () => {
       const resolveTaskControlUiSessionUrl = vi.fn(() => testCase.inspectUrl);
       setTaskRegistryDeliveryRuntimeForTests({
@@ -2237,14 +2248,14 @@ describe("task-registry", () => {
         runId: "run-direct-delivery",
         stream: "lifecycle",
         data: {
-          phase: "end",
+          phase: testCase.phase,
           endedAt: 250,
         },
       });
 
       await waitForAssertion(() =>
         expectRecordFields(requireTaskByRunId("run-direct-delivery"), {
-          status: "succeeded",
+          status: testCase.status,
           deliveryStatus: "delivered",
         }),
       );
@@ -2257,7 +2268,7 @@ describe("task-registry", () => {
       });
       expect(String(message.content)).toContain(
         testCase.childSessionKey
-          ? "Background task ready for review: ACP background task"
+          ? "Background task failed: ACP background task"
           : "Background task done: ACP background task",
       );
       if (testCase.childSessionKey) {
@@ -2282,20 +2293,30 @@ describe("task-registry", () => {
 
   it.each([
     {
-      name: "Discord",
+      name: "Discord channel",
+      deliveryStatus: "session_queued",
       channel: "discord",
       to: "channel:parent-channel",
       threadId: "thread-84022",
       ownerKey: "agent:main:discord:guild-123:channel-parent-channel",
     },
     {
-      name: "Slack",
+      name: "Slack channel",
+      deliveryStatus: "session_queued",
       channel: "slack",
       to: "channel:C123",
       threadId: "1710000000.9999",
       ownerKey: "agent:main:slack:channel:c123",
     },
-  ])("delivers delegated ACP completion directly to a $name thread origin", async (origin) => {
+    {
+      name: "Discord main-session",
+      channel: "discord",
+      to: "channel:parent-channel",
+      threadId: "thread-84022",
+      ownerKey: "agent:main:main",
+      deliveryStatus: "pending",
+    },
+  ])("hands delegated ACP completion from a $name thread to the parent", async (origin) => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
       resetTaskRegistryForTests({ persist: false });
@@ -2306,12 +2327,13 @@ describe("task-registry", () => {
         via: "direct",
       });
 
-      createAcpTaskRecord({
+      const task = createAcpTaskRecord({
         ownerKey: origin.ownerKey,
         requesterOrigin: {
           channel: origin.channel,
           to: origin.to,
           threadId: origin.threadId,
+          accountId: "requester-account",
         },
         runId,
         task: "Investigate thread-bound ACP delivery",
@@ -2329,38 +2351,240 @@ describe("task-registry", () => {
       });
 
       await waitForAssertion(() => {
-        const task = findTaskByRunId(runId);
-        if (!task) {
-          throw new Error(`Expected task for run ${runId}`);
-        }
-        expect(task.status).toBe("succeeded");
-        expect(task.deliveryStatus).toBe("delivered");
+        expectRecordFields(requireTaskById(task.taskId), {
+          status: "succeeded",
+          deliveryStatus: origin.deliveryStatus,
+        });
+        expect(peekSystemEventEntries(origin.ownerKey)).toEqual([
+          expect.objectContaining({
+            contextKey: `task:${task.taskId}`,
+            text: expect.stringContaining("Background task ready for review: ACP background task"),
+            deliveryContext: {
+              channel: origin.channel,
+              to: origin.to,
+              threadId: origin.threadId,
+              accountId: "requester-account",
+            },
+          }),
+        ]);
       });
-      await waitForAssertion(() => expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(1));
-      const message = sentMessageCall();
-      expectRecordFields(message, {
-        channel: origin.channel,
-        to: origin.to,
-        threadId: origin.threadId,
-      });
-      expect(String(message.content)).toContain(
-        "Background task ready for review: ACP background task",
-      );
-      expect(String(message.content)).toContain("ACP final answer");
-      expect(String(message.content)).toContain(
-        "Next: parent will review/verify before calling it done.",
-      );
-      expect(peekSystemEvents(origin.ownerKey)).toStrictEqual([]);
+      const events = peekSystemEventEntries(origin.ownerKey);
+      expect(events[0]?.text).toContain("ACP final answer");
+      expect(events[0]?.text).toContain("Next: parent will review/verify before calling it done.");
+      expect(selectAgentSystemEvents(events, "main")).toEqual(events);
+      await flushHeartbeatWakeRequests();
+      expectHeartbeatWake("background-task", origin.ownerKey);
+      expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
+
+      await maybeDeliverTaskTerminalUpdate(task.taskId);
+      expect(peekSystemEventEntries(origin.ownerKey)).toEqual(events);
+      expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
     });
   });
 
-  it("keeps delegated ACP completion queued when the transport does not declare thread delivery", async () => {
+  it.each([
+    { name: "before requester settle", delivered: false, inline: false, retained: false },
+    { name: "after requester settle", delivered: true, inline: false, retained: false },
+    { name: "with inline delivery", delivered: false, inline: true, retained: false },
+    { name: "with a retained logical task", delivered: false, inline: false, retained: true },
+  ])(
+    "leaves paired ACP completion with its registered owner $name",
+    async ({ delivered, inline, retained }) => {
+      await withTaskRegistryTempDir(async () => {
+        const ownerKey = "agent:main:discord:channel:parent";
+        const childSessionKey = "agent:grok:acp:paired-child";
+        const runId = "run-paired-acp-completion";
+        const resultText = "The verified release is v2.2.0.";
+        const requesterOrigin = {
+          channel: "discord",
+          to: "channel:parent",
+          threadId: "paired-thread",
+          accountId: "requester-account",
+        };
+        const entry = createSubagentRegistrationRecord(
+          {
+            runId,
+            childSessionKey,
+            requesterSessionKey: ownerKey,
+            requesterDisplayKey: ownerKey,
+            requesterAgentId: "main",
+            task: "Check the latest release",
+            cleanup: "keep",
+            spawnMode: "run",
+            expectsCompletionMessage: !inline,
+          },
+          {
+            now: 100,
+            generation: 1,
+            lifecycleGeneration: getAgentEventLifecycleGeneration(),
+            requesterAgentId: "main",
+            requesterOrigin,
+          },
+        );
+        entry.taskRunId = retained ? "retained-task-run" : runId;
+        entry.execution = { status: "terminal", endedAt: 250, outcome: { status: "ok" } };
+        entry.completion = { required: !inline, resultText, capturedAt: 250 };
+        entry.delivery = { status: inline ? "not_required" : delivered ? "delivered" : "pending" };
+        if (!inline && !delivered) {
+          entry.requesterSettleWake = {
+            status: "pending",
+            attemptCount: 0,
+            requesterYieldBatch: true,
+            rearmGeneration: 1,
+            batchRunIds: [runId],
+          };
+        }
+        subagentRuns.set(runId, entry);
+        try {
+          const subagentTask = createTaskFixture("subagent", {
+            ownerKey,
+            requesterAgentId: "main",
+            childSessionKey,
+            runId: entry.taskRunId,
+            requesterOrigin,
+            task: entry.task,
+            status: "succeeded",
+            terminalSummary: resultText,
+            deliveryStatus: inline ? "not_applicable" : delivered ? "delivered" : "pending",
+            detail: createSubagentTaskBackingDetail(1),
+          });
+          const acpTask = createAcpTaskRecord({
+            ownerKey,
+            requesterAgentId: "main",
+            childSessionKey,
+            runId,
+            requesterOrigin,
+            task: entry.task,
+            terminalSummary: resultText,
+          });
+          const canonicalEntry = structuredClone(entry);
+
+          emitAgentEvent({
+            runId,
+            sessionKey: childSessionKey,
+            stream: "lifecycle",
+            data: { phase: "end", endedAt: 250 },
+          });
+          await waitForAssertion(() => {
+            expectRecordFields(requireTaskById(acpTask.taskId), {
+              status: "succeeded",
+              deliveryStatus: "not_applicable",
+              terminalSummary: resultText,
+            });
+          });
+          await maybeDeliverTaskTerminalUpdate(acpTask.taskId);
+          await maybeDeliverTaskTerminalUpdate(subagentTask.taskId);
+          await flushHeartbeatWakeRequests();
+
+          expect(peekSystemEvents(ownerKey)).toEqual([]);
+          expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
+          expect(
+            heartbeatWakeRequests.filter((request) => request.source.startsWith("background-task")),
+          ).toEqual([]);
+          expect(entry).toEqual(canonicalEntry);
+          expectRecordFields(requireTaskById(subagentTask.taskId), {
+            deliveryStatus: subagentTask.deliveryStatus,
+            terminalSummary: resultText,
+          });
+        } finally {
+          subagentRuns.delete(runId);
+        }
+      });
+    },
+  );
+
+  it.each(["run", "child", "requester", "agent"] as const)(
+    "does not suppress an ACP handoff for a different registered %s",
+    async (mismatch) => {
+      await withTaskRegistryTempDir(async () => {
+        const ownerKey = "global";
+        const childSessionKey = "agent:grok:acp:scoped-child";
+        const runId = "run-scoped-acp-completion";
+        const entry = createSubagentRegistrationRecord(
+          {
+            runId: mismatch === "run" ? "other-run" : runId,
+            childSessionKey: mismatch === "child" ? "agent:grok:acp:other-child" : childSessionKey,
+            requesterSessionKey: mismatch === "requester" ? "other-parent" : ownerKey,
+            requesterDisplayKey: ownerKey,
+            task: "Other background work",
+            cleanup: "keep",
+            expectsCompletionMessage: true,
+          },
+          {
+            now: 100,
+            generation: 1,
+            lifecycleGeneration: getAgentEventLifecycleGeneration(),
+            requesterAgentId: mismatch === "agent" ? "other-agent" : "main",
+          },
+        );
+        subagentRuns.set(entry.runId, entry);
+        try {
+          const task = createAcpTaskRecord({
+            ownerKey,
+            requesterAgentId: "main",
+            childSessionKey,
+            runId,
+          });
+          emitAgentEvent({
+            runId,
+            sessionKey: childSessionKey,
+            stream: "lifecycle",
+            data: { phase: "end", endedAt: 250 },
+          });
+          await waitForAssertion(() =>
+            expectRecordFields(requireTaskById(task.taskId), {
+              status: "succeeded",
+              deliveryStatus: "session_queued",
+            }),
+          );
+          expect(peekSystemEvents(ownerKey)).toEqual([
+            expect.stringContaining("Background task ready for review"),
+          ]);
+        } finally {
+          subagentRuns.delete(entry.runId);
+        }
+      });
+    },
+  );
+
+  it("does not let an orphaned subagent task row swallow an ACP completion", async () => {
+    await withTaskRegistryTempDir(async () => {
+      const ownerKey = "agent:main:discord:channel:parent";
+      const childSessionKey = "agent:grok:acp:orphaned-child";
+      const runId = "run-orphaned-paired-completion";
+      createTaskFixture("subagent", {
+        ownerKey,
+        childSessionKey,
+        runId,
+        task: "Old registered task",
+        status: "succeeded",
+        deliveryStatus: "delivered",
+        detail: createSubagentTaskBackingDetail(1),
+      });
+      const task = createAcpTaskRecord({ ownerKey, childSessionKey, runId });
+      emitAgentEvent({
+        runId,
+        sessionKey: childSessionKey,
+        stream: "lifecycle",
+        data: { phase: "end", endedAt: 250 },
+      });
+      await waitForAssertion(() =>
+        expectRecordFields(requireTaskById(task.taskId), {
+          status: "succeeded",
+          deliveryStatus: "session_queued",
+        }),
+      );
+      expect(peekSystemEvents(ownerKey)).toEqual([
+        expect.stringContaining("Background task ready for review"),
+      ]);
+    });
+  });
+
+  it("keeps delegated ACP completion queued for other channel thread origins", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
       resetTaskRegistryForTests({ persist: false });
       const runId = "run-guildchat-thread-terminal";
-      // guildchat is deliverable but declares no thread capability, so a thread-shaped
-      // origin must keep routing through the parent session instead of direct delivery.
       const requesterOrigin = {
         channel: "guildchat",
         to: "channel:room-9",
@@ -4604,9 +4828,11 @@ describe("task-registry", () => {
       await flushAsyncWork();
 
       expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
-      expect(peekSystemEvents("agent:main:main")).toEqual([
-        "Background task ready for review: ACP background task (run run-quie). Next: parent will review/verify before calling it done.",
-      ]);
+      await waitForAssertion(() =>
+        expect(peekSystemEvents("agent:main:main")).toEqual([
+          "Background task ready for review: ACP background task (run run-quie). Next: parent will review/verify before calling it done.",
+        ]),
+      );
       relay.dispose();
       await vi.runOnlyPendingTimersAsync();
       vi.useRealTimers();

@@ -531,6 +531,7 @@ export async function spawnAcpDirect(
               parentSessionKey,
               childSessionKey: sessionKey,
               childSessionId: state.initializedSession.sessionId,
+              childSessionStorePath: state.initializedSession.storePath,
               agentId: targetAgentId,
               env: parentRelayStateEnv,
               mainKey: cfg.session?.mainKey,

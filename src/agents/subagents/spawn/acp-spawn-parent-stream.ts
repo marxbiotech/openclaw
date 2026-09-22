@@ -12,6 +12,7 @@ import {
   resolveChannelStreamingProgressCommentary,
   type StreamingCompatEntry,
 } from "../../../channels/streaming.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../../../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { onAgentEventForRun } from "../../../infra/agent-events.js";
 import {
@@ -158,6 +159,7 @@ export function startAcpSpawnParentStreamRelay(params: {
   parentSessionKey: string;
   childSessionKey: string;
   childSessionId?: string;
+  childSessionStorePath?: string;
   agentId: string;
   env?: NodeJS.ProcessEnv;
   /**
@@ -216,6 +218,28 @@ export function startAcpSpawnParentStreamRelay(params: {
   const childSessionId = normalizeOptionalString(params.childSessionId);
   // Delayed flushes must keep the state database selected when the relay started.
   const stateEnv = { ...(params.env ?? process.env) };
+  const diagnosticTarget = (() => {
+    if (!childSessionId) {
+      return undefined;
+    }
+    if (!params.childSessionStorePath) {
+      return { agentId: params.agentId, path: undefined };
+    }
+    try {
+      return resolveSqliteTargetFromSessionStorePath(params.childSessionStorePath, {
+        agentId: params.agentId,
+        env: stateEnv,
+      });
+    } catch (error) {
+      // Diagnostics are best effort; never redirect them to an unrelated default store.
+      log.warn("Failed to resolve ACP parent stream diagnostic store", {
+        runId,
+        childSessionId,
+        error: String(error),
+      });
+      return undefined;
+    }
+  })();
   const pendingLogEvents: Array<{ event: AcpParentStreamEvent; createdAt: number }> = [];
   let logFlushTimer: NodeJS.Timeout | undefined;
   let logFailureWarned = false;
@@ -246,13 +270,14 @@ export function startAcpSpawnParentStreamRelay(params: {
   };
   function flushLogEvents(options: { terminal?: boolean } = {}) {
     clearLogFlushTimer();
-    if (!childSessionId || pendingLogEvents.length === 0) {
+    if (!childSessionId || !diagnosticTarget || pendingLogEvents.length === 0) {
       return;
     }
     const events = pendingLogEvents.splice(0);
     try {
       recordAcpParentStreamEvents({
-        agentId: params.agentId,
+        agentId: diagnosticTarget.agentId ?? params.agentId,
+        path: diagnosticTarget.path,
         env: stateEnv,
         sessionId: childSessionId,
         runId,
@@ -289,7 +314,7 @@ export function startAcpSpawnParentStreamRelay(params: {
     logFlushTimer.unref?.();
   }
   const logEvent = (kind: string, fields?: Record<string, unknown>) => {
-    if (!childSessionId) {
+    if (!childSessionId || !diagnosticTarget) {
       return;
     }
     const createdAt = Date.now();

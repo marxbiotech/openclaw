@@ -148,11 +148,17 @@ describe("plugin node execution authorization", () => {
           } else if (reason === "plugin-replaced") {
             setActivePluginRegistry(createEmptyPluginRegistry());
           } else if (reason === "plugin-disabled") {
-            invocation.registry.plugins[0].enabled = false;
+            const plugin = invocation.registry.plugins[0];
+            if (!plugin) {
+              throw new Error("Expected the registered fixture plugin");
+            }
+            plugin.enabled = false;
           } else {
-            invocation.registry.nodeHostCommands[0].command = {
-              ...invocation.registry.nodeHostCommands[0].command,
-            };
+            const registration = invocation.registry.nodeHostCommands[0];
+            if (!registration) {
+              throw new Error("Expected the registered fixture command");
+            }
+            registration.command = { ...registration.command };
           }
         });
         await expect(invocation.result).rejects.toThrow("authority is closed");

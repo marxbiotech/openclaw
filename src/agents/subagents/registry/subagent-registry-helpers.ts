@@ -185,6 +185,9 @@ export async function persistSubagentSessionTiming(
       return next;
     },
     {
+      // A duplicate terminal callback can retire this writer while it waits.
+      // Decline that commit before the assertion, including an already-prepared patch.
+      shouldCommit: options?.isCurrentGeneration,
       assertCommitAllowed: options?.assertCommitAllowed,
       replaceEntry: true,
     },
