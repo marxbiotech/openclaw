@@ -37,7 +37,7 @@ snapshot for reference.
 
 The replacement lives in `moltbot-app/image-extensions/remote-acpx` on branch
 `feat/remote-acpx-v2026.9.5`. It implements an owner-aware ACP backend, stable
-node affinity, upstream duplex transport, invocation-owned node workers using
+node affinity, upstream duplex transport, node-owned workers using
 `acpx@0.16.0`, cancellation, elicitation, and persistent session resumption.
 The legacy plugin tools, roster, event router, session manager, and job store
 are removed. Node execution currently supports macOS and Linux.
@@ -66,9 +66,12 @@ design concerns transport, state ownership, and current runtime contracts.
    plugin-owned duplex command on the Gateway and node.
 4. **Node plugin:** Own local runtime execution and process cleanup through
    `registerNodeHostCommand`, including availability and disconnect lifecycle.
-   Use the published `acpx/runtime` interface inside a worker owned by each
-   invocation. Call the live execution guard immediately before spawning that
-   worker; join acpx cleanup and worker exit before publishing the result.
+   Use the published `acpx/runtime` interface inside a node-owned worker. Retain
+   the worker across session initialization and setup until the first turn so
+   providers that persist only after a prompt keep their new session alive.
+   Call the live execution guard immediately before spawning or reusing a
+   worker. Turns and terminal operations join runtime cleanup and worker exit
+   before publishing the result; disconnect also drains retained setup workers.
 5. **State:** Keep conversation and task state with existing OpenClaw owners.
    Remote handles and node-local acpx session resources remain backend-owned.
    Avoid a second conversation/job manager with independent TTL and completion
@@ -113,9 +116,11 @@ with node-owned execution records and reconciliation.
 - The focused SDK and migrated bundled ACPX tests pass (15 tests), and the SDK
   TypeScript test shard passes.
 - The plugin typechecks against the built fork and its process/integration tests
-  pass (26 tests). They exercise actual acpx against a synthetic ACP harness,
+  pass (29 tests). They exercise actual acpx against a synthetic ACP harness,
   including registered plugin routing, persisted follow-up, explicit and signal
   cancellation, elicitation, ownership, stale handles, and descendant cleanup.
+  Regressions cover providers that persist only on their first prompt, fresh
+  execution authority when reusing a worker, and stale-close isolation.
 - A clean production-only npm install succeeds without the sibling development
   checkout. The plugin needs the matching fork build at runtime.
 
@@ -130,7 +135,7 @@ manager returns to idle with the prompt recorded by the node-local peer.
 Existing deployed Gateways/nodes and data are untouched.
 
 The current public node execution contract requires a real approval for every
-operation that launches a worker; this implementation requests Allow once.
+operation that starts or reuses a worker; this implementation requests Allow once.
 Cancellation of admitted work does not prompt again. ACP harness permission
 mode is independent and does not grant OpenClaw execution authority. No fake
 Full authority, scope elevation, or standing approval cache is introduced.
@@ -153,5 +158,27 @@ and refuses to overwrite an existing version tag.
 The application Dockerfile now pins this base. Its image tags derive from the
 OpenClaw image version plus the application commit, and its Docker build checks
 actual remote-acpx registration and worker imports as the non-root runtime user.
-Deployment validation remains separate from image publication. Publishing these
-images does not upgrade existing Gateways, paired nodes, or live data.
+The application image containing the first-session lifecycle fix is published as
+`ghcr.io/marxbiotech/moltbot-app:mb2026.9.5-beta.1-3b85179`, with multi-platform
+digest `sha256:8256fc28b272dc0f4683ec1c855f2039dcefb756d8d1b9e42dc6ed46b6c5e804`.
+The [application image run](https://github.com/marxbiotech/moltbot-app/actions/runs/35706055842)
+passed native amd64 and arm64 checks. Registry readback confirms both variants
+retain the corresponding pinned OpenClaw base layers.
+
+On 2026-09-22, this published image ran in an isolated ARM64 Kubernetes Pod,
+paired with a temporary node process on a physical macOS host. Cross-machine
+checks passed for approvals, cwd, streaming, persisted follow-up, the silent
+35-second turn, cancellation, elicitation, and canonical manager admission.
+Two real Claude turns also passed through `chat.send`, `agent.wait`, the
+canonical ACP manager, and the paired node; the second turn recalled the first
+reply, and both returned the manager to idle. Provider login remained only in
+the temporary node process environment. The test-only manager ingress uses the
+current request config, matching normal chat admission after startup changes.
+
+The Kubernetes proof used port-forwarding and temporary state. It does not prove
+an upgrade of existing data or the deployed network route. Production Pod
+identity, images, readiness, and restart counts were unchanged, and test
+resources were removed. The first cold image pull took about 24 minutes and
+briefly triggered node disk pressure before automatic recovery; deployment
+planning must account for image storage and pull time. Publishing these images
+does not upgrade existing Gateways, paired nodes, or live data.
