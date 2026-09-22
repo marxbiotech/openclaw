@@ -110,6 +110,33 @@ export type AcpElicitationHandler = (
   context: AcpElicitationContext,
 ) => Promise<AcpElicitationResponse>;
 
+/** Native permission request facts; session and tool IDs are correlation, never authority. */
+export type AcpPermissionRequest = {
+  sessionId: string;
+  inferredKind: string | undefined;
+  raw: {
+    sessionId: string;
+    toolCall: {
+      toolCallId: string;
+      title?: string | null;
+      kind?: string | null;
+      rawInput?: unknown;
+      locations?: Array<{ path: string; line?: number | null }> | null;
+    };
+    options: Array<{ optionId: string; kind: string; name: string }>;
+  };
+};
+
+export type AcpPermissionDecision = {
+  outcome: "allow_once" | "allow_always" | "reject_once" | "reject_always" | "cancel";
+};
+
+/** Closure-bound to one admitted turn and the native request's abort lifetime. */
+export type AcpPermissionHandler = (
+  request: AcpPermissionRequest,
+  context: { signal: AbortSignal },
+) => Promise<AcpPermissionDecision | undefined>;
+
 /** Per-turn payload delivered to ACP adapters. */
 export type AcpRuntimeTurnInput = {
   handle: AcpRuntimeHandle;
@@ -120,6 +147,8 @@ export type AcpRuntimeTurnInput = {
   signal?: AbortSignal;
   /** Handles provider-neutral user input requests owned by this exact turn. */
   onElicitation?: AcpElicitationHandler;
+  /** Relays unresolved native permissions to the host's existing approval owner. */
+  onPermissionRequest?: AcpPermissionHandler;
 };
 
 export type AcpRuntimeCapabilities = {

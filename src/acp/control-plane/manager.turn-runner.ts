@@ -1,11 +1,16 @@
 /** Runs ACP turns, failover, timeout cleanup, and detached-task progress mirroring. */
-import type { AcpRuntime, AcpRuntimeHandle } from "@openclaw/acp-core/runtime/types";
+import type {
+  AcpPermissionHandler,
+  AcpRuntime,
+  AcpRuntimeHandle,
+} from "@openclaw/acp-core/runtime/types";
 import { expectDefined } from "@openclaw/normalization-core";
 import { logVerbose } from "../../globals.js";
 import {
   recordSessionHumanDirectMessage,
   recordSubagentTerminalState,
 } from "../../sessions/session-state-events.js";
+import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
 import { AcpRuntimeError, formatAcpErrorChain, toAcpRuntimeError } from "../runtime/errors.js";
 import { markAcpTurnActive } from "./active-turns.js";
 import type { AcceptedTurnState } from "./manager.accepted-turns.js";
@@ -216,6 +221,8 @@ export async function runManagerTurn(params: {
         let completionEvidenceText = "";
         let completionEvidenceBytes = 0;
         let completionEvidenceOverflowed = false;
+        const permissionLifetime = new AbortController();
+        let permissionHandler: AcpPermissionHandler | undefined;
         try {
           const ensured = await params.ensureRuntimeHandle({
             cfg: input.cfg,
@@ -291,6 +298,46 @@ export async function runManagerTurn(params: {
               requestId: input.requestId,
               signal: input.signal,
               onElicitation: input.onElicitation,
+              onPermissionRequest: async (request, context) => {
+                try {
+                  // Keep approval transport out of ACP startup until a native harness asks.
+                  const { createAcpPermissionHandler } = await import("./permission-handler.js");
+                  permissionHandler ??= createAcpPermissionHandler({
+                    admittedRunContext: input.admittedRunContext,
+                    backendId: ensured.meta.backend,
+                    agentId,
+                    sessionKey,
+                    cwd: ensured.handle.cwd,
+                    signal: AbortSignal.any([
+                      permissionLifetime.signal,
+                      params.acceptedTurn.abortController.signal,
+                      ...(input.signal ? [input.signal] : []),
+                    ]),
+                    assertActive: () => {
+                      if (!params.isCurrentActor()) {
+                        throw createSupersededActorError(sessionKey);
+                      }
+                    },
+                    getDeliveryContext: () =>
+                      resolveBackgroundTaskContext({
+                        deps: params.deps,
+                        cfg: input.cfg,
+                        sessionKey,
+                        agentId,
+                        requestId: input.requestId,
+                        text: input.text,
+                      })?.requesterOrigin ??
+                      deliveryContextFromSession(
+                        params.deps.loadSessionEntry({ cfg: input.cfg, sessionKey, agentId })
+                          ?.entry,
+                      ),
+                  });
+                  return await permissionHandler(request, context);
+                } catch {
+                  // A missing approval runtime must never select a backend's permissive fallback.
+                  return { outcome: "cancel" };
+                }
+              },
             },
             eventGate,
             onBeforePrompt: input.onBeforePrompt,
@@ -490,6 +537,7 @@ export async function runManagerTurn(params: {
           }
           break;
         } finally {
+          permissionLifetime.abort(new Error("ACP backend attempt settled"));
           if (params.acceptedTurn.activeTurn === activeTurn) {
             params.acceptedTurn.activeTurn = undefined;
           }

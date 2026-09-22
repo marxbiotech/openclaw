@@ -262,61 +262,73 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(ensureSpy).not.toHaveBeenCalled();
   });
 
-  it("advertises elicitation modes and forwards the exact elicitation handler for plain and managed sessions", async () => {
-    const onElicitation = vi.fn(async () => ({ action: "cancel" as const }));
-    const handle = (sessionKey: string) => ({
-      sessionKey,
-      backend: "acpx",
-      runtimeSessionName: sessionKey,
-      acpxRecordId: sessionKey,
-    });
-    const runThrough = async (runtime: AcpxRuntime, sessionKey: string) => {
-      await runtime.startTurn({
-        handle: handle(sessionKey),
-        text: "ask",
-        mode: "prompt",
-        requestId: `request:${sessionKey}`,
-        onElicitation,
-      }).result;
-    };
-    const baseStore = (agentCommand: string): TestSessionStore => ({
-      load: vi.fn(async (sessionId: string) => ({ acpxRecordId: sessionId, agentCommand })),
-      save: vi.fn(async () => {}),
-    });
+  it.each(["approve-all", "approve-reads", "deny-all"] as const)(
+    "forwards input handlers while retaining %s for plain and managed sessions",
+    async (permissionMode) => {
+      const onElicitation = vi.fn(async () => ({ action: "cancel" as const }));
+      const onPermissionRequest = vi.fn(async () => ({ outcome: "cancel" as const }));
+      const handle = (sessionKey: string) => ({
+        sessionKey,
+        backend: "acpx",
+        runtimeSessionName: sessionKey,
+        acpxRecordId: sessionKey,
+      });
+      const runThrough = async (runtime: AcpxRuntime, sessionKey: string) => {
+        await runtime.startTurn({
+          handle: handle(sessionKey),
+          text: "ask",
+          mode: "prompt",
+          requestId: `request:${sessionKey}`,
+          onElicitation,
+          onPermissionRequest,
+        }).result;
+      };
+      const baseStore = (agentCommand: string): TestSessionStore => ({
+        load: vi.fn(async (sessionId: string) => ({ acpxRecordId: sessionId, agentCommand })),
+        save: vi.fn(async () => {}),
+      });
 
-    const defaultRuntime = makeRuntime(baseStore(CODEX_ACP_COMMAND), {
-      elicitationModes: ["form", "url"],
-    });
-    const defaultTurn = vi.spyOn(defaultRuntime.delegate, "startTurn").mockImplementation(makeTurn);
-    await runThrough(defaultRuntime.runtime, "agent:codex:acp:default");
+      const defaultRuntime = makeRuntime(baseStore(CODEX_ACP_COMMAND), {
+        elicitationModes: ["form", "url"],
+        permissionMode,
+      });
+      const defaultTurn = vi
+        .spyOn(defaultRuntime.delegate, "startTurn")
+        .mockImplementation(makeTurn);
+      await runThrough(defaultRuntime.runtime, "agent:codex:acp:default");
 
-    const bridgeRuntime = makeRuntime(baseStore(DOCUMENTED_OPENCLAW_BRIDGE_COMMAND), {
-      elicitationModes: ["form", "url"],
-      mcpServers: [{ name: "tools", command: "mcp-tools" }] as never,
-    });
-    const bridgeDelegate = bridgeRuntime.delegate;
-    const bridgeTurn = vi.spyOn(bridgeDelegate, "startTurn").mockImplementation(makeTurn);
-    await runThrough(bridgeRuntime.runtime, "agent:openclaw:acp:bridge");
+      const bridgeRuntime = makeRuntime(baseStore(DOCUMENTED_OPENCLAW_BRIDGE_COMMAND), {
+        elicitationModes: ["form", "url"],
+        permissionMode,
+        mcpServers: [{ name: "tools", command: "mcp-tools" }] as never,
+      });
+      const bridgeDelegate = bridgeRuntime.delegate;
+      const bridgeTurn = vi.spyOn(bridgeDelegate, "startTurn").mockImplementation(makeTurn);
+      await runThrough(bridgeRuntime.runtime, "agent:openclaw:acp:bridge");
 
-    const managedRuntime = makeRuntime(baseStore(CODEX_ACP_COMMAND), {
-      elicitationModes: ["form", "url"],
-      openclawToolsMcpBridgeEnabled: true,
-      mcpServers: [{ name: "openclaw-tools", command: "node", args: [], env: [] }],
-    });
-    const managedDelegate = managedRuntime.delegate;
-    const managedTurn = vi.spyOn(managedDelegate, "startTurn").mockImplementation(makeTurn);
-    await runThrough(managedRuntime.runtime, "agent:codex:acp:managed");
+      const managedRuntime = makeRuntime(baseStore(CODEX_ACP_COMMAND), {
+        elicitationModes: ["form", "url"],
+        permissionMode,
+        openclawToolsMcpBridgeEnabled: true,
+        mcpServers: [{ name: "openclaw-tools", command: "node", args: [], env: [] }],
+      });
+      const managedDelegate = managedRuntime.delegate;
+      const managedTurn = vi.spyOn(managedDelegate, "startTurn").mockImplementation(makeTurn);
+      await runThrough(managedRuntime.runtime, "agent:codex:acp:managed");
 
-    for (const turn of [defaultTurn, bridgeTurn, managedTurn]) {
-      expect(turn).toHaveBeenCalledOnce();
-      expect(turn.mock.calls[0]?.[0].onElicitation).toBe(onElicitation);
-    }
-    for (const delegate of [defaultRuntime.delegate, bridgeDelegate, managedDelegate] as Array<{
-      options?: { elicitationModes?: readonly string[] };
-    }>) {
-      expect(delegate.options?.elicitationModes).toEqual(["form", "url"]);
-    }
-  });
+      for (const turn of [defaultTurn, bridgeTurn, managedTurn]) {
+        expect(turn).toHaveBeenCalledOnce();
+        expect(turn.mock.calls[0]?.[0].onElicitation).toBe(onElicitation);
+        expect(turn.mock.calls[0]?.[0].onPermissionRequest).toBeUndefined();
+      }
+      for (const delegate of [defaultRuntime.delegate, bridgeDelegate, managedDelegate] as Array<{
+        options?: { elicitationModes?: readonly string[]; permissionMode?: string };
+      }>) {
+        expect(delegate.options?.elicitationModes).toEqual(["form", "url"]);
+        expect(delegate.options?.permissionMode).toBe(permissionMode);
+      }
+    },
+  );
 
   it.each([
     { wrapperRoot: "/tmp/openclaw/acpx", command: CODEX_ACP_WRAPPER_COMMAND },

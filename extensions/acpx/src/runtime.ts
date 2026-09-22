@@ -1143,6 +1143,9 @@ export class AcpxRuntime implements CompleteAcpRuntime {
             try {
               const turn = delegate.startTurn({
                 ...toAcpxResourceInput(input),
+                // Local ACPX keeps its operator-configured permissionMode. Host permission
+                // callbacks take precedence over that policy; remote backends opt in separately.
+                onPermissionRequest: undefined,
                 // OpenClaw owns deadlines; ACPX must not complete partial output.
                 timeoutMs: 0,
               });

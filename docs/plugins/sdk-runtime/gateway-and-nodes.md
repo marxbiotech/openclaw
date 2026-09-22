@@ -337,3 +337,31 @@ matching `registerNodeHostCommand` registration. Keep backend handles bound to
 the selected node and session owner. Node execution still requires command
 allowlisting, a node invoke policy, and live node-local execution authorization;
 registering an ACP backend grants none of those permissions.
+
+`AcpRuntimeTurnInput.onPermissionRequest` is a per-turn host capability for
+unresolved native harness permissions. Forward it to acpx's matching callback,
+or relay its request and result over the invocation's existing duplex channel.
+The callback accepts `AcpPermissionRequest` and a request-owned `AbortSignal`;
+it returns an `AcpPermissionDecision`. Missing callbacks, cancellation, expired
+requests, disconnects, and stale turns must fail closed, never fall through to
+an automatic permission grant.
+
+The ACP manager binds the callback to the admitted run, session, selected
+backend, and backend-attempt lifetime. It uses the existing plugin approval
+owner and configured channel reviewers. Spawned child requests use the current
+parent session's delivery route. Native session IDs, tool IDs, and request text
+are correlation/display facts, not execution authority. A backend must stop
+pending callbacks when its invocation ends and check that lifetime again before
+returning an allowed answer to the native harness.
+
+The host offers **Allow once** and **Deny**, and only returns `allow_once` when
+the native request explicitly advertises that option. It never translates a
+one-shot approval into `allow_always`. Native harness auto modes remain
+responsible for work they already permit; this callback handles only requests
+they still require a human to approve. It does not change node launch policy,
+enable a native bypass mode, or create a second approval store.
+
+This is an opt-in backend capability. The bundled local ACPX adapter retains
+its existing `permissionMode` policy and does not forward the host callback.
+Remote backends that opt in must explicitly connect it to their native
+permission requests; the callback's presence alone grants no execution rights.
