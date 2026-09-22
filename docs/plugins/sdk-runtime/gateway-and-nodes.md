@@ -296,3 +296,24 @@ The reporter is revoked when the service stops or its plugin registry generation
 late callback from an old generation cannot overwrite current health. Prefer returning the startup
 promise when the service is not usable until that promise settles; use the reporter only for
 deliberately nonblocking work that owns its own stop path.
+
+## ACP execution backends
+
+The fork's `openclaw/plugin-sdk/acp-backend` entrypoint provides the typed
+`AcpRuntime` contract, `registerAcpRuntimeBackend`, `getAcpRuntimeBackend`,
+`unregisterAcpRuntimeBackend`, ACP runtime errors, and `tryDispatchAcpReplyHook`.
+It uses the same registry and reply dispatcher as the bundled ACPX plugin.
+The upstream v2026.9.5 package does not yet publish this typed entrypoint.
+
+Register the runtime when the plugin service starts. On stop, unregister only
+if `getAcpRuntimeBackend(id)?.runtime` still equals the service's own runtime,
+then settle its outstanding work. Use `tryDispatchAcpReplyHook` for the
+`reply_dispatch` hook with `eligibleDispatchKinds: ["acp"]` when providing ACP
+reply dispatch. Session admission, task state, cancellation policy, and delivery
+remain owned by the host's ACP control plane.
+
+A remote backend can delegate through `api.runtime.nodes.openDuplex` and a
+matching `registerNodeHostCommand` registration. Keep backend handles bound to
+the selected node and session owner. Node execution still requires command
+allowlisting, a node invoke policy, and live node-local execution authorization;
+registering an ACP backend grants none of those permissions.

@@ -63,7 +63,7 @@ const { realRuntime, realServiceStartMock, realServiceStopMock, createRealServic
     };
   });
 
-vi.mock("openclaw/plugin-sdk/acp-runtime-backend", () => ({
+vi.mock("openclaw/plugin-sdk/acp-backend", () => ({
   getAcpRuntimeBackend: (id: string) => runtimeRegistry.get(id),
   registerAcpRuntimeBackend: (entry: { id: string; runtime: unknown }) => {
     runtimeRegistry.set(entry.id, entry);

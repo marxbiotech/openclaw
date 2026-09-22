@@ -2,14 +2,14 @@
  * Public runtime API barrel for ACPX. Core and plugin consumers import these
  * SDK-facing ACP runtime contracts instead of reaching into ACPX internals.
  */
-export type { AcpRuntimeErrorCode } from "openclaw/plugin-sdk/acp-runtime-backend";
+export type { AcpRuntimeErrorCode } from "openclaw/plugin-sdk/acp-backend";
 export {
   AcpRuntimeError,
   getAcpRuntimeBackend,
   tryDispatchAcpReplyHook,
   registerAcpRuntimeBackend,
   unregisterAcpRuntimeBackend,
-} from "openclaw/plugin-sdk/acp-runtime-backend";
+} from "openclaw/plugin-sdk/acp-backend";
 export type {
   AcpRuntime,
   AcpRuntimeCapabilities,
@@ -25,7 +25,7 @@ export type {
   AcpRuntimeTurnResult,
   AcpRuntimeTurnResultError,
   AcpSessionUpdateTag,
-} from "openclaw/plugin-sdk/acp-runtime-backend";
+} from "openclaw/plugin-sdk/acp-backend";
 export type {
   OpenClawPluginApi,
   OpenClawPluginConfigSchema,

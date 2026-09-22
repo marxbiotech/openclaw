@@ -12,6 +12,9 @@ type PluginSdkDocMetadata = {
 };
 
 export const pluginSdkDocMetadata = {
+  "acp-backend": {
+    category: "runtime",
+  },
   core: {
     category: "core",
   },

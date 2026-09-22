@@ -30,47 +30,59 @@ Gateways or nodes. Deployment and upstream state upgrades are separate work.
 
 ## Current status
 
-**Implementation is incomplete.** Commit `11e2c0fe7f3` captured preliminary
-node event bridging, process handling, an SDK facade, node affinity plumbing,
-and cwd filtering. PR #7 is a draft containing that snapshot.
+Commit `341913ee43e` reverted the preliminary port in `11e2c0fe7f3`. The custom
+node event bridge, core process runner, remote-acpx SDK facade, nodeName plumbing,
+and unrelated cwd filtering are removed. Existing branch history retains the
+snapshot for reference.
 
-The snapshot is reference material, not a required starting implementation.
-Replace or remove its additions when the selected upstream interfaces cover
-their responsibilities. Completing the old bridge is not a project requirement.
+The replacement lives in `moltbot-app/image-extensions/remote-acpx` on branch
+`feat/remote-acpx-v2026.9.5`. It implements an owner-aware ACP backend, stable
+node affinity, upstream duplex transport, invocation-owned node workers using
+`acpx@0.16.0`, cancellation, elicitation, and persistent session resumption.
+The legacy plugin tools, roster, event router, session manager, and job store
+are removed. Node execution currently supports macOS and Linux.
+
+One generic core addition is required: `openclaw/plugin-sdk/acp-backend` exposes
+the canonical backend types, existing registry, errors, and lazy reply hook.
+The bundled ACPX plugin now consumes the same contract. The upstream
+`acp-runtime` and `process-runtime` facades are explicitly classified as private;
+the former being packaged does not make it a supported typed external API.
+The new plugin uses no private runtime facade.
 
 The previous note incorrectly said the ACP backend registry was introduced
 following v2026.7.1. Both the registry and backend SDK already existed, and the
 legacy remote-acpx plugin already registered an `AcpRuntime` backend. The new
 design concerns transport, state ownership, and current runtime contracts.
 
-## Proposed architecture
+## Implemented architecture
 
 1. **Gateway control plane:** Use existing ACP/session/task owners for admission,
    conversation state, turn lifecycle, cancellation, and delivery.
 2. **Gateway plugin:** Implement a remote `AcpRuntime` adapter through public SDK
    interfaces. Resolve a paired-node target and retain its stable identity for
    the session.
-3. **Transport:** Use `api.runtime.nodes.invoke` for bounded operations and
-   `api.runtime.nodes.openDuplex` for streamed interactions. Register the same
+3. **Transport:** Use `api.runtime.nodes.openDuplex` for controls and streamed
+   interactions. Register the same
    plugin-owned duplex command on the Gateway and node.
 4. **Node plugin:** Own local runtime execution and process cleanup through
    `registerNodeHostCommand`, including availability and disconnect lifecycle.
-   Prefer the published `acpx/runtime` interface over duplicated CLI protocol
-   parsing, subject to node-side execution validation.
+   Use the published `acpx/runtime` interface inside a worker owned by each
+   invocation. Call the live execution guard immediately before spawning that
+   worker; join acpx cleanup and worker exit before publishing the result.
 5. **State:** Keep conversation and task state with existing OpenClaw owners.
    Remote handles and node-local acpx session resources remain backend-owned.
    Avoid a second conversation/job manager with independent TTL and completion
    rules.
 
-One plugin package can supply both host roles. Its existing internals may be
-replaced completely. Limit core changes to demonstrated gaps in the new
-workflow; zero core changes remains a hypothesis to verify.
+One plugin package supplies both host roles. Core owns conversation/task state;
+the plugin owns execution adapters. The core change is limited to the demonstrated
+public backend-registration contract gap.
 
 Relevant upstream contracts:
 
 - [ACP agents](/tools/acp-agents)
 - [Plugin Gateway and node runtime](/plugins/sdk-runtime/gateway-and-nodes)
-- `src/plugin-sdk/acp-runtime.ts`
+- `src/plugin-sdk/acp-backend.ts`
 - `packages/acp-core/src/runtime/types.ts`
 - `src/plugins/types.node-host.ts`
 
@@ -95,12 +107,31 @@ Continuing active work while disconnected is not provided by the transport and
 is not an inherited compatibility requirement. If needed, specify it separately
 with node-owned execution records and reconciliation.
 
-## Next checkpoint
+## Validation and delivery
 
-Prove a minimal Gateway-plugin to paired-node-plugin round trip on stock
-v2026.9.5, including actual acpx execution, output, cancellation, long-running
-work, and disconnect handling. Use the evidence to finalize the adapter boundary,
-integrate the standard ACP agent flow, and remove superseded fork plumbing.
+- The full OpenClaw build passes with the public backend declarations included.
+- The focused SDK and migrated bundled ACPX tests pass (15 tests), and the SDK
+  TypeScript test shard passes.
+- The plugin typechecks against the built fork and its process/integration tests
+  pass (26 tests). They exercise actual acpx against a synthetic ACP harness,
+  including registered plugin routing, persisted follow-up, explicit and signal
+  cancellation, elicitation, ownership, stale handles, and descendant cleanup.
+- A clean production-only npm install succeeds without the sibling development
+  checkout. The plugin needs the matching fork build at runtime.
 
-Analysis so far is based on source and contract inspection. Runtime, end-to-end,
-upgrade, and deployment readiness have not been established.
+The isolated live Gateway/node test also passes: actual device and command
+pairing, captured plugin loading, five real plugin approvals, node-local cwd,
+streamed output, persistent follow-up, a silent 35-second turn through upstream
+heartbeats, acknowledged cancellation, and bidirectional elicitation. It uses a
+synthetic ACP peer and temporary state; no provider credentials are needed.
+Existing deployed Gateways/nodes and data are untouched.
+
+The current public node execution contract requires a real approval for every
+operation that launches a worker; this implementation requests Allow once.
+Cancellation of admitted work does not prompt again. ACP harness permission
+mode is independent and does not grant OpenClaw execution authority. No fake
+Full authority, scope elevation, or standing approval cache is introduced.
+
+Keep both PRs in draft until the intended verification is complete and a matching
+base image is built and pinned in the application image. The application still
+pins the legacy release image; publishing and deployment are separate work.
