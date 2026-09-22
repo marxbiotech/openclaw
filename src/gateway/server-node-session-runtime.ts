@@ -3,11 +3,6 @@ import {
   resolveCurrentPairedDeviceNodeBinding,
 } from "../infra/device-pairing-node-state.js";
 import type { VoiceWakeRoutingConfig } from "../infra/voicewake-routing.js";
-import {
-  registerAcpNodeChecker,
-  registerAcpNodeListProvider,
-  registerAcpNodeSender,
-} from "./acp-node-event-bridge.js";
 import { GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED } from "./events.js";
 import {
   createNodeRegistryRuntime,
@@ -69,17 +64,6 @@ export function createGatewayNodeSessionRuntime(params: {
           params.onPairingGenerationChanged?.(change);
         },
       }),
-  );
-  // Wire the ACP node event bridge so a remote-acpx runtime plugin can
-  // dispatch acp.spawn/turn/kill events to paired nodes and query connectivity
-  // without importing gateway internals.
-  registerAcpNodeSender((nodeId, event, payload) => nodeRegistry.sendEvent(nodeId, event, payload));
-  registerAcpNodeChecker((nodeId) => nodeRegistry.get(nodeId) !== undefined);
-  registerAcpNodeListProvider(() =>
-    nodeRegistry
-      .listConnected()
-      .filter((node) => node.caps.includes("acp"))
-      .map((node) => ({ nodeId: node.nodeId, displayName: node.displayName })),
   );
   setNodeRunnerStateChangedListener(nodeRegistry, (nodeId, change) => {
     // Lifecycle listeners advance the session-list cache fence before clients

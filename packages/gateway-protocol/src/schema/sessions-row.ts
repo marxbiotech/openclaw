@@ -185,8 +185,6 @@ export const SessionRowSchema = Type.Object(
     execCwd: Type.Optional(Type.String()),
     spawnedWorkspaceDir: Type.Optional(Type.String()),
     spawnedCwd: Type.Optional(Type.String()),
-    /** ACP session cwd — set for rows whose entry has runtime.acp state. */
-    acpCwd: Type.Optional(Type.String()),
     /** Persisted project registry association, distinct from a cloud repository workspace. */
     projectId: Type.Optional(Type.String()),
     /** Persisted task cwd or spawned workspace; no filesystem resolution is implied. */

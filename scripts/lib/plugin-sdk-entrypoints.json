@@ -138,7 +138,6 @@
   "windows-spawn",
   "acp-runtime",
   "acp-runtime-backend",
-  "remote-acpx",
   "acp-binding-runtime",
   "acp-binding-resolve-runtime",
   "lazy-runtime",

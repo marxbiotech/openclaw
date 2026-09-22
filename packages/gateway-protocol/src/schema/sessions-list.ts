@@ -76,8 +76,6 @@ export const SessionsListParamsSchema = closedObject({
   spawnedBy: Type.Optional(NonEmptyString),
   agentId: Type.Optional(NonEmptyString),
   search: Type.Optional(Type.String()),
-  /** Filter rows by ACP session cwd (case-insensitive substring match). */
-  cwd: Type.Optional(Type.String()),
   /**
    * True lists archived sessions; "all" lists archived and active;
    * false or omitted lists active sessions.

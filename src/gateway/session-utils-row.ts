@@ -461,7 +461,6 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     swarmGroupId: entry?.swarmGroupId,
     spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,
     spawnedCwd: entry?.spawnedCwd,
-    acpCwd: entry?.acp?.cwd,
     workspaceDir: entry?.spawnedCwd ?? entry?.spawnedWorkspaceDir,
     projectId: entry?.projectId,
     permissionMode: entry?.permissionMode,

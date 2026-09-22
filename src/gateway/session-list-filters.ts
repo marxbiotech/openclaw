@@ -80,7 +80,6 @@ export function* filterSessionEntries(
   const boardFace = opts.boardFace;
   const agentId = typeof opts.agentId === "string" ? normalizeAgentId(opts.agentId) : "";
   const search = normalizeLowercaseStringOrEmpty(opts.search);
-  const cwdFilter = normalizeLowercaseStringOrEmpty(opts.cwd);
   const activeMinutes =
     typeof opts.activeMinutes === "number" && Number.isFinite(opts.activeMinutes)
       ? Math.max(1, Math.floor(opts.activeMinutes))
@@ -214,12 +213,6 @@ export function* filterSessionEntries(
       (entry.pinnedAt !== undefined && isPinnableSessionEntry(storeKey, entry)) !== opts.pinned
     ) {
       return false;
-    }
-    if (cwdFilter) {
-      const entryCwd = entry.acp?.cwd;
-      if (typeof entryCwd !== "string" || !entryCwd.toLowerCase().includes(cwdFilter)) {
-        return false;
-      }
     }
     return true;
   };

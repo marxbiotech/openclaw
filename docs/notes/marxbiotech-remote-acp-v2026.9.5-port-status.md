@@ -1,90 +1,106 @@
-# marxbiotech/remote-acp port onto upstream v2026.9.5 — status
+# Remote ACP on upstream v2026.9.5 — design decision and status
 
 Branch: `marxbiotech/v2026.9.5-remote-acp`
-Base: upstream tag `v2026.9.5` (commit `ec9c1a13db8`)
-Source of fork work: `marxbiotech/remote-acp` (commit `eec7f18fc95`, "build(release): bump fork version to 2026.7.1-beta.9 (ai pin preserved)")
-Recovery baseline: `backup/remote-acp-before-2026.7.1-20260922` (preserved, not modified)
+Base: upstream tag `v2026.9.5` (`ec9c1a13db8`)
+PR: [marxbiotech/openclaw#7](https://github.com/marxbiotech/openclaw/pull/7)
+Legacy release reference: `marxbiotech/v2026.7.1-remote-acpx` (`eec7f18fc95`)
 
-## Status
+## Accepted scope — 2026-09-22
 
-**Port is UNFINISHED.** This branch currently contains only this status note on top of pristine `v2026.9.5`. A prior working-tree merge attempt was aborted after reconnaissance revealed that the fork's remote-acp/remote-acpx design predates a substantial upstream re-architecture of the ACP runtime backend. A mechanical port is not viable; the work needs to be reimplemented against upstream's new interfaces.
+Build remote ACP against the architecture available in upstream v2026.9.5.
+The operator explicitly permits discarding the legacy implementation and its
+compatibility requirements. Existing releases provide legacy behavior until
+this version is complete.
 
-## Scope
+The required product capability is:
 
-Fork delta versus `v2026.7.1`:
+> An agent running through the Gateway can direct acpx on a paired node and
+> receive its execution results, with the workspace and harness execution on
+> that node.
 
-- 292 files changed, ~3,808 insertions / 1,521 deletions.
-- 178 fork commits after `--cherry-pick` equivalence filtering.
-- 6 files added by the fork; 5 remain fork-only in v2026.9.5.
-  Upstream now ships `src/plugins/install-npm-resolution.ts` independently.
+Preserve that delegation workflow. Legacy tool names, configuration shapes,
+SDK exports, event names, internal data formats, and implementation structure
+are not acceptance requirements. The new implementation does not need legacy
+fallbacks, dual execution paths, or migration of old plugin sessions and jobs.
+Unrelated fork patches and release customizations need a concrete requirement
+for the new version before being carried forward.
 
-## Merge preview against `v2026.9.5` (aborted)
+This decision does not authorize deleting deployment data or changing running
+Gateways or nodes. Deployment and upstream state upgrades are separate work.
 
-`git merge --no-commit --no-ff marxbiotech/remote-acp` produced **812 conflict markers**:
+## Current status
 
-|                                        Kind | Count |
-| ------------------------------------------: | ----- |
-|                  UU (both modified content) | 649   |
-|     DU (deleted upstream, modified in fork) | 119   |
-| AA (added on both sides, differing content) | 44    |
+**Implementation is incomplete.** Commit `11e2c0fe7f3` captured preliminary
+node event bridging, process handling, an SDK facade, node affinity plumbing,
+and cwd filtering. PR #7 is a draft containing that snapshot.
 
-## Upstream churn on fork-critical files (v2026.7.1 → v2026.9.5)
+The snapshot is reference material, not a required starting implementation.
+Replace or remove its additions when the selected upstream interfaces cover
+their responsibilities. Completing the old bridge is not a project requirement.
 
-Commit counts touching each hot path:
+The previous note incorrectly said the ACP backend registry was introduced
+following v2026.7.1. Both the registry and backend SDK already existed, and the
+legacy remote-acpx plugin already registered an `AcpRuntime` backend. The new
+design concerns transport, state ownership, and current runtime contracts.
 
-- `packages/gateway-protocol/src/schema/sessions.ts` — 72
-- `src/gateway/server.impl.ts` — 58
-- `src/node-host/runner.ts` — 50
-- `src/gateway/session-utils.ts` — 50
-- `src/config/zod-schema.agent-runtime.ts` — 34
-- `src/agents/tools/sessions-list-tool.ts` — 27
-- `extensions/acpx/package.json` — 24
-- `src/plugin-sdk/api-baseline.ts` — 16
-- `src/agents/acp-spawn.ts` — 14
-- `src/config/types.agents.ts` — 12
-- `src/acp/control-plane/manager.initialize-session.ts` — 7
-- `src/plugins/install.ts` — 6
+## Proposed architecture
 
-## Architectural blocker
+1. **Gateway control plane:** Use existing ACP/session/task owners for admission,
+   conversation state, turn lifecycle, cancellation, and delivery.
+2. **Gateway plugin:** Implement a remote `AcpRuntime` adapter through public SDK
+   interfaces. Resolve a paired-node target and retain its stable identity for
+   the session.
+3. **Transport:** Use `api.runtime.nodes.invoke` for bounded operations and
+   `api.runtime.nodes.openDuplex` for streamed interactions. Register the same
+   plugin-owned duplex command on the Gateway and node.
+4. **Node plugin:** Own local runtime execution and process cleanup through
+   `registerNodeHostCommand`, including availability and disconnect lifecycle.
+   Prefer the published `acpx/runtime` interface over duplicated CLI protocol
+   parsing, subject to node-side execution validation.
+5. **State:** Keep conversation and task state with existing OpenClaw owners.
+   Remote handles and node-local acpx session resources remain backend-owned.
+   Avoid a second conversation/job manager with independent TTL and completion
+   rules.
 
-Upstream v2026.9.5 has introduced a first-class ACP runtime backend registry that did not exist at v2026.7.1. The fork's `src/plugin-sdk/remote-acpx.ts` and its supporting node-host/gateway plumbing were designed against the older direct-invocation shape and no longer align with the new surface.
+One plugin package can supply both host roles. Its existing internals may be
+replaced completely. Limit core changes to demonstrated gaps in the new
+workflow; zero core changes remains a hypothesis to verify.
 
-New upstream modules that supersede or reshape the fork's design:
+Relevant upstream contracts:
 
-- `src/acp/runtime/registry.ts` (`registerAcpRuntimeBackend` / `requireAcpRuntimeBackend`)
-- `src/acp/runtime/errors.ts` (`AcpRuntimeError`, `AcpRuntimeErrorCode`)
-- `src/acp/runtime/session-meta*.ts` (session-meta store, doctor, legacy migration, readonly)
-- `src/acp/runtime/session-control-owner.ts`
-- `src/acp/runtime/availability.ts`
-- `src/plugin-sdk/acp-runtime-backend.ts` (compat facade for released `@openclaw/acpx` packages)
-- `src/plugin-sdk/acp-runtime.ts` (public helpers: `resolveAcpSessionAvailability`, `readAcpSessionEntry`, ...)
-- `src/plugin-sdk/acpx.ts` (backend-private dispatch: `tryDispatchAcpReplyHook`, deny-policy handling)
+- [ACP agents](/tools/acp-agents)
+- [Plugin Gateway and node runtime](/plugins/sdk-runtime/gateway-and-nodes)
+- `src/plugin-sdk/acp-runtime.ts`
+- `packages/acp-core/src/runtime/types.ts`
+- `src/plugins/types.node-host.ts`
 
-Upstream also removed `src/plugin-sdk/entrypoints.ts` (fork edited it) in favour of the new module split.
+## Proposed acceptance checks
 
-## Recommended path forward
+- A Gateway agent starts acpx work in the requested workspace on the selected
+  paired node and receives progress, a terminal result, and actionable errors.
+- Follow-up work uses the intended conversation and node. An unavailable target
+  never silently redirects work to the Gateway or another node.
+- Cancellation reaches the active remote turn and reports its actual outcome;
+  late events from an earlier turn cannot settle or cancel its successor.
+- Long turns use appropriate execution budgets and upstream transport heartbeat
+  behavior.
+- Restart and disconnect behavior is explicit. Duplex channels cannot survive
+  disconnection; recovery must reconcile the original execution before replaying
+  a prompt that may already have started.
+- Pairing, command policy, and execution authorization work for the actual custom
+  plugin installation, without assuming privileged scope elevation or automatic
+  session-full approval authority.
 
-1. Treat this as a **re-integration**, not a rebase.
-   The fork's remote-acp/remote-acpx capability should be recast as an implementation of upstream's `AcpRuntime` backend and registered via `registerAcpRuntimeBackend`.
-2. Split the port into focused PRs:
-   - **PR-A (release plumbing)**: reapply the `@marxbiotech/*` package rename, `mb*` release flow, extension shrinkwrap regeneration, `scripts/openclaw-npm-*` adaptations. Mechanical; use `4e3f9dac4ec chore: reapply mb* release flow on 2026.7.1` as the model.
-   - **PR-B (core remote-acpx backend)**: implement remote-acpx as an `AcpRuntimeBackend` using the new registry; wire node-side dispatch through the new `AcpRuntimeCapabilities` shape; adapt `src/node-host/invoke-acp.ts` to the new session-meta store.
-   - **PR-C (gateway/session integration)**: reapply the fork edits to `src/gateway/session-utils.ts`, `server.impl.ts`, `agents/tools/sessions-list-tool.ts` on top of the new upstream shape (nodeName affinity, cwd filtering, ACP node-event bridge).
-   - **PR-D (auxiliary edits)**: extension patches (`extensions/codex/*`, `extensions/memory-core/*`, `extensions/diagnostics-otel/*`), infra migrations (`state-migrations.ts`, `install-source-utils.ts`), private-mode / update-runner.
-3. Preserve `marxbiotech/remote-acp` unchanged as the recovery baseline until at least PR-B is deployed to a persona and verified.
+Continuing active work while disconnected is not provided by the transport and
+is not an inherited compatibility requirement. If needed, specify it separately
+with node-owned execution records and reconciliation.
 
-## Deployment consequences (not addressed by this branch)
+## Next checkpoint
 
-Per `docs/openclaw-2026.7.1-upgrade-runbook.md` (in `moltbot-env`), the last major port required schema migration, live-PVC strip, ambiguous-session-key handling, `doctor --fix` auto auth-import, crashloop-vs-atomic timeout tuning, and node LaunchAgent reinstall. Expect at least the same depth here, plus new steps for the ACP session-meta store migration (`src/acp/runtime/session-meta.legacy-migration.test.ts` is a hint).
+Prove a minimal Gateway-plugin to paired-node-plugin round trip on stock
+v2026.9.5, including actual acpx execution, output, cancellation, long-running
+work, and disconnect handling. Use the evidence to finalize the adapter boundary,
+integrate the standard ACP agent flow, and remove superseded fork plumbing.
 
-## Files considered but not applied
-
-The following fork-only additions were previewed but left unstaged because they do not compile against upstream's new plugin-sdk / gateway surface:
-
-- `src/gateway/acp-node-event-bridge.ts`
-- `src/node-host/invoke-acp.ts`
-- `src/node-host/invoke-acp.test.ts`
-- `src/plugin-sdk/remote-acpx.ts`
-- `docs/technical/session-node-affinity.md` (fork-only, and the fork's `docs/technical/` directory does not exist in upstream; the doc semantics need re-evaluation against the new session-meta store)
-
-All are available at their fork revisions on `marxbiotech/remote-acp` for reference during the re-integration work.
+Analysis so far is based on source and contract inspection. Runtime, end-to-end,
+upgrade, and deployment readiness have not been established.

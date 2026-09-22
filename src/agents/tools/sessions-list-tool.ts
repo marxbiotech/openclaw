@@ -81,7 +81,6 @@ const SessionsListToolSchema = Type.Object({
   agentId: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
   search: Type.Optional(Type.String({ minLength: 1 })),
   archived: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("all")])),
-  cwd: Type.Optional(Type.String({ minLength: 1 })),
   includeDerivedTitles: Type.Optional(Type.Boolean()),
   includeLastMessage: Type.Optional(Type.Boolean()),
 });
@@ -242,7 +241,6 @@ export function createSessionsListTool(opts?: {
       const label = readToolStringParam(params, "label");
       const agentId = readToolStringParam(params, "agentId");
       const search = readToolStringParam(params, "search");
-      const cwd = readToolStringParam(params, "cwd");
       const archived = params.archived === "all" ? "all" : params.archived === true;
       const relationship = readToolStringParam(params, "relationship", {
         required: params.relationship !== undefined,
@@ -325,7 +323,6 @@ export function createSessionsListTool(opts?: {
             label,
             agentId,
             search,
-            cwd,
             archived,
             activeOnly: params.activeOnly === true,
             excludeSubagents: params.excludeSubagents === true,

@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.9.5-fork.remote-acp.1",
+  "version": "2026.9.5",
   "openclaw": {
     "schemaVersions": {
       "state": 17,
