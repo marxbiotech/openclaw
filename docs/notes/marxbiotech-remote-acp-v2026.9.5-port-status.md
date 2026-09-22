@@ -124,6 +124,9 @@ pairing, captured plugin loading, five real plugin approvals, node-local cwd,
 streamed output, persistent follow-up, a silent 35-second turn through upstream
 heartbeats, acknowledged cancellation, and bidirectional elicitation. It uses a
 synthetic ACP peer and temporary state; no provider credentials are needed.
+A second live check initializes canonical ACP metadata through the host manager,
+sends a real `chat.send` turn, waits through `agent.wait`, and verifies the
+manager returns to idle with the prompt recorded by the node-local peer.
 Existing deployed Gateways/nodes and data are untouched.
 
 The current public node execution contract requires a real approval for every
