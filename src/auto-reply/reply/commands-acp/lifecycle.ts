@@ -162,6 +162,7 @@ export async function handleAcpSpawnAction(
       agent: spawn.agentId,
       mode: spawn.mode,
       cwd: runtimeCwd,
+      ...(spawn.nodeName ? { nodeName: spawn.nodeName } : {}),
     });
     sessionEntry = initialized.sessionEntry;
     closeRuntimeOnFailure = initialized.closeRuntimeOnFailure;

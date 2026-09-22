@@ -64,6 +64,7 @@ type ParsedSpawnInput = {
   bind: AcpSpawnBindMode;
   cwd?: string;
   label?: string;
+  nodeName?: string;
 };
 
 type ParsedSteerInput = {
@@ -176,8 +177,9 @@ export function parseSpawnInput(
   let cwd: string | undefined;
   let label: string | undefined;
   let rawAgentId: string | undefined;
+  let nodeName: string | undefined;
 
-  for (let i = 0; i < normalizedTokens.length;) {
+  for (let i = 0; i < normalizedTokens.length; ) {
     const token = normalizedTokens[i] ?? "";
 
     const modeOption = readOptionValue({ tokens: normalizedTokens, index: i, flag: "--mode" });
@@ -256,6 +258,16 @@ export function parseSpawnInput(
       continue;
     }
 
+    const nodeOption = readOptionValue({ tokens: normalizedTokens, index: i, flag: "--node" });
+    if (nodeOption.matched) {
+      if (nodeOption.error) {
+        return { ok: false, error: `${nodeOption.error}. ${ACP_SPAWN_USAGE}` };
+      }
+      nodeName = normalizeOptionalString(nodeOption.value);
+      i = nodeOption.nextIndex;
+      continue;
+    }
+
     if (token.startsWith("--")) {
       return {
         ok: false,
@@ -294,6 +306,20 @@ export function parseSpawnInput(
     };
   }
 
+  // Fall back to the agent entry's runtime.acp.nodeName when the caller did
+  // not explicitly target a node with --node.
+  let resolvedNodeName = nodeName;
+  if (!resolvedNodeName) {
+    const agentEntry = params.cfg.agents?.entries?.[normalizedAgentId];
+    const runtime = agentEntry?.runtime;
+    if (runtime && "acp" in runtime) {
+      const entryNodeName = normalizeOptionalString(runtime.acp?.nodeName);
+      if (entryNodeName) {
+        resolvedNodeName = entryNodeName;
+      }
+    }
+  }
+
   return {
     ok: true,
     value: {
@@ -303,6 +329,7 @@ export function parseSpawnInput(
       bind,
       cwd,
       label,
+      ...(resolvedNodeName ? { nodeName: resolvedNodeName } : {}),
     },
   };
 }
@@ -312,7 +339,7 @@ export function parseSteerInput(tokens: string[]): Result<ParsedSteerInput, stri
   let sessionToken: string | undefined;
   const instructionTokens: string[] = [];
 
-  for (let i = 0; i < normalizedTokens.length;) {
+  for (let i = 0; i < normalizedTokens.length; ) {
     const sessionOption = readOptionValue({
       tokens: normalizedTokens,
       index: i,

@@ -29,6 +29,7 @@ import {
   type NodeHostCloudflareAccessConfig,
 } from "./gateway-cloudflare-access.js";
 import { resolveNodeHostGatewayPlatformIdentity } from "./gateway-platform-identity.js";
+import { handleAcpEvent } from "./invoke-acp.js";
 import {
   coerceNodeInvokeCancelPayload,
   coerceNodeInvokeInputPayload,
@@ -305,6 +306,10 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
         if (payload) {
           activeRuntime.handleInput(payload.invokeId, payload.seq, payload.payloadJSON);
         }
+        return;
+      }
+      if (evt.event.startsWith("acp.")) {
+        handleAcpEvent(evt, client);
         return;
       }
       if (evt.event !== "node.invoke.request") {

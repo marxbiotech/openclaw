@@ -118,6 +118,7 @@ type SpawnAcpParams = {
   expectsCompletionMessage?: boolean;
   streamTo?: "parent";
   attachments?: AcpTurnAttachment[];
+  nodeName?: string;
 };
 
 type SpawnAcpContext = {
@@ -484,6 +485,7 @@ export async function spawnAcpDirect(
         modelExplicit: runtimeOptionsResult.modelExplicit,
         thinkingExplicit: runtimeOptionsResult.thinkingExplicit,
         cwd: runtimeCwd,
+        ...(params.nodeName ? { nodeName: params.nodeName } : {}),
       });
       closeRuntimeOnFailure = initializedSession.initialized.closeRuntimeOnFailure;
       ctx.assertActive?.();

@@ -71,6 +71,8 @@ export type AcpRuntimeEnsureInput = {
   thinkingExplicit?: boolean;
   cwd?: string;
   env?: Record<string, string>;
+  /** Display name of the target node for remote dispatch; the backend resolves it. */
+  nodeName?: string;
 };
 
 export type AcpRuntimeTurnAttachment = {

@@ -63,6 +63,8 @@ export type AcpInitializeSessionInput = {
   thinkingExplicit?: boolean;
   cwd?: string;
   backendId?: string;
+  /** Display name of a paired node to target for remote ACP dispatch. */
+  nodeName?: string;
 };
 
 export type AcpTurnAttachment = AcpRuntimeTurnAttachment;

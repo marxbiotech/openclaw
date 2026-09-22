@@ -16,6 +16,10 @@
       "types": "./dist/src/plugin-sdk/acp-runtime-backend.d.ts",
       "default": "./src/acp-runtime-backend.ts"
     },
+    "./remote-acpx": {
+      "types": "./dist/src/plugin-sdk/remote-acpx.d.ts",
+      "default": "./src/remote-acpx.ts"
+    },
     "./async-lock-runtime": {
       "types": "./dist/src/plugin-sdk/async-lock-runtime.d.ts",
       "default": "./src/async-lock-runtime.ts"

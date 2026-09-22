@@ -55,6 +55,7 @@ import {
   normalizeNodePresenceAliveReason,
 } from "../shared/node-presence.js";
 import { deliveryContextFromSession } from "../utils/delivery-context.shared.js";
+import { getAcpNodeEventHandler } from "./acp-node-event-bridge.js";
 import { resolveChatAttachmentMaxBytes as defaultResolveChatAttachmentMaxBytes } from "./chat-attachment-policy.js";
 import {
   INLINE_IMAGE_DURABLE_OMISSION_MARKER as DEFAULT_INLINE_IMAGE_DURABLE_OMISSION_MARKER,
@@ -1184,6 +1185,17 @@ export const handleNodeEvent = async (
           ),
         );
       }
+      return undefined;
+    }
+    case "acp.spawned":
+    case "acp.message":
+    case "acp.exited":
+    case "acp.error": {
+      const payload = parsePayloadObject(evt.payloadJSON);
+      if (!payload) {
+        return undefined;
+      }
+      getAcpNodeEventHandler()?.(nodeId, { event: evt.event, payload });
       return undefined;
     }
     case "push.apns.register": {

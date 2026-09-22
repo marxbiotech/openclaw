@@ -344,6 +344,8 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Optional ACP session mode default for this agent (persistent or oneshot).",
   "agents.entries.*.runtime.acp.cwd":
     "Optional default working directory for this agent's ACP sessions.",
+  "agents.entries.*.runtime.acp.nodeName":
+    "Display name of a paired node to pin this agent to for remote ACP dispatch. Requires an ACP backend that supports remote node targeting (for example the remote-acpx runtime).",
   "agents.entries.*.identity.avatar":
     "Avatar image path (relative to the agent workspace only) or a remote URL/data URL.",
   "agents.defaults.heartbeat.timeoutSeconds":

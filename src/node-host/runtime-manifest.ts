@@ -48,6 +48,10 @@ export function buildNodeHostManifest(params: {
       params.claudeEnabled ? [NODE_AGENT_CLI_CLAUDE_RUN_COMMAND] : [],
     ],
     ["screen", params.desktopStreamingEnabled ? [NODE_DESKTOP_STREAM_COMMAND] : []],
+    // Remote ACP dispatch: an "acp" cap advertises acp.spawn/turn/kill event
+    // support so the gateway-side bridge can enumerate nodes that can host an
+    // acpx runtime. The commands themselves are event-only (no request/response).
+    ["acp", ["acp.spawn", "acp.turn", "acp.kill"]],
   ];
   const commands = [
     ...new Set([

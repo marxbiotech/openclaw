@@ -168,6 +168,7 @@ export async function initializeAcpSpawnRuntime(params: {
   modelExplicit?: boolean;
   thinkingExplicit?: boolean;
   cwd?: string;
+  nodeName?: string;
 }): Promise<AcpSpawnInitializedRuntime> {
   params.assertActive?.();
   const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
@@ -204,6 +205,7 @@ export async function initializeAcpSpawnRuntime(params: {
     thinkingExplicit: params.thinkingExplicit,
     cwd: params.cwd,
     backendId: params.backendId,
+    ...(params.nodeName ? { nodeName: params.nodeName } : {}),
   });
 
   return {

@@ -79,6 +79,8 @@ const AgentRuntimeAcpSchema = z
     mode: z.enum(["persistent", "oneshot"]).optional(),
     /** Optional runtime working directory override. */
     cwd: z.string().optional(),
+    /** Display name of the node to pin this agent to for remote ACP dispatch. */
+    nodeName: z.string().min(1).optional(),
   })
   .strict()
   .optional();
