@@ -7,7 +7,6 @@ import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { hasErrnoCode } from "../../infra/errors.js";
 import { resolveRequiredHomeDir } from "../../infra/home-dir.js";
 import {
-  DEFAULT_OPENCLAW_PACKAGE_NAME,
   OPENCLAW_PACKAGE_NAMES,
   isOpenClawPackageName,
 } from "../../infra/openclaw-package-identity.js";
@@ -150,7 +149,7 @@ const UPSTREAM_REPOSITORY_URL = "https://github.com/openclaw/openclaw.git";
 // A shallow clone would make older or non-default dev targets unreachable.
 const GIT_CLONE_BLOB_FILTER = "--filter=blob:none";
 
-export const DEFAULT_PACKAGE_NAME = DEFAULT_OPENCLAW_PACKAGE_NAME;
+export const DEFAULT_PACKAGE_NAME = OPENCLAW_PACKAGE_NAMES[0];
 
 /** Normalize a CLI tag/version/spec into the npm target form accepted by update flows. */
 export function normalizeTag(value?: string | null): string | null {

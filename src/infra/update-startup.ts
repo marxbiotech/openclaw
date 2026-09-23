@@ -29,10 +29,7 @@ import {
 } from "./gateway-supervision.js";
 import { gitCommitPrefixesMatch } from "./git-commit.js";
 import { executeGitCommand } from "./git-exec.js";
-import {
-  DEFAULT_OPENCLAW_PACKAGE_NAME,
-  isOpenClawPackageName,
-} from "./openclaw-package-identity.js";
+import { OPENCLAW_PACKAGE_NAMES, isOpenClawPackageName } from "./openclaw-package-identity.js";
 import { readPackageName } from "./package-json.js";
 import {
   readRestartSentinelSnapshot,
@@ -820,8 +817,8 @@ async function runGatewayUpdateCheckOwned(
     : null;
   const packageName = isOpenClawPackageName(installedPackageName)
     ? installedPackageName
-    : DEFAULT_OPENCLAW_PACKAGE_NAME;
-  const isForkPackage = packageName !== DEFAULT_OPENCLAW_PACKAGE_NAME;
+    : OPENCLAW_PACKAGE_NAMES[0];
+  const isForkPackage = packageName !== OPENCLAW_PACKAGE_NAMES[0];
   // Upstream telemetry describes its own releases, never a fork's npm channel.
   const telemetryUpdate = isForkPackage
     ? null
@@ -833,7 +830,7 @@ async function runGatewayUpdateCheckOwned(
   const rawNowIsValid = asDateTimestampMs(rawNow) !== undefined;
   const lastCheckedAt = state.lastCheckedAt ? Date.parse(state.lastCheckedAt) : null;
   const cacheMatchesPackage =
-    (state.lastCheckedPackageName ?? DEFAULT_OPENCLAW_PACKAGE_NAME) === packageName;
+    (state.lastCheckedPackageName ?? OPENCLAW_PACKAGE_NAMES[0]) === packageName;
   const persistedAvailable =
     isDevGit || !cacheMatchesPackage
       ? null

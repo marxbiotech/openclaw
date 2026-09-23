@@ -54,9 +54,15 @@ node scripts/marxbiotech-npm-release.mjs smoke /tmp/openclaw-npm-candidate
 ```
 
 Use a fresh output directory. The artifact's `release.json` records its exact
-version, source commit, and integrity. Rerun a failed publish job with its
-existing artifact; never rebuild or move a published tag to repair a release.
-A registry version with different bytes is rejected. After publication, download
+version, source commit, and integrity. npm scans accepted publications before
+they become installable, typically taking several minutes. The publish job
+waits up to 30 minutes for the exact version, integrity, and selected dist-tag
+to become visible. If this wait expires, check registry visibility and the npm
+maintainer scan status before rerunning; do not submit another publication while
+the accepted version is still processing. Once visible, rerun the failed job
+with its existing artifact to reconcile without publishing again. Never rebuild
+or move a published tag to repair a release. A registry version with different
+bytes is rejected. After publication, download
 the workflow's exact `marxbiotech-npm-release` artifact and run
 `node scripts/marxbiotech-npm-release.mjs verify <artifact-directory>` to verify
 integrity and a fresh registry installation. Dist-tag updates require

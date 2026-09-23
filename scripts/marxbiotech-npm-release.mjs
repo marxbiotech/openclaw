@@ -23,16 +23,22 @@ const integrity = (filename) =>
   `sha512-${createHash("sha512").update(fs.readFileSync(filename)).digest("base64")}`;
 
 export function releaseIdentity(tag, sourceVersion) {
-  const match =
-    /^mb((\d{4}\.[1-9]\d*\.(?:0|[1-9]\d*))(?:-((?:0|[1-9]\d*|[\da-z-]*[a-z-][\da-z-]*)(?:\.(?:0|[1-9]\d*|[\da-z-]*[a-z-][\da-z-]*))*))?)$/iu.exec(
-      tag ?? "",
-    );
-  if (!match) {
+  const match = /^mb(\d{4}\.[1-9]\d*\.(?:0|[1-9]\d*))(?:-(.+))?$/iu.exec(tag ?? "");
+  const prerelease = match?.[2];
+  // Validate identifiers independently so ambiguous repeated separators cannot
+  // cause exponential backtracking in a whole-version expression.
+  if (
+    !match ||
+    prerelease
+      ?.split(".")
+      .some((identifier) => !/^[\da-z-]+$/iu.test(identifier) || /^0\d+$/u.test(identifier))
+  ) {
     throw new Error(
       "Expected an mb-prefixed semantic release tag, e.g. mb2026.9.5 or mb2026.9.5-beta.1",
     );
   }
-  const [, version, base, prerelease] = match;
+  const base = match[1];
+  const version = prerelease ? `${base}-${prerelease}` : base;
   if (sourceVersion !== base && sourceVersion !== version) {
     throw new Error(`Tag ${tag} does not match source package version ${sourceVersion}`);
   }
@@ -258,9 +264,9 @@ async function smoke(directory, fromRegistry = false) {
   }
 }
 
-async function registryVersion(version) {
-  const response = await fetch(`${REGISTRY}/${encodeURIComponent(PACKAGE)}/${version}`, {
-    signal: AbortSignal.timeout(30_000),
+async function registryVersion(version, { fetchImpl = globalThis.fetch, timeoutMs = 30_000 } = {}) {
+  const response = await fetchImpl(`${REGISTRY}/${encodeURIComponent(PACKAGE)}/${version}`, {
+    signal: AbortSignal.timeout(timeoutMs),
     headers: { "cache-control": "no-cache" },
   });
   if (response.status === 404) {
@@ -281,6 +287,77 @@ export function verifyPublishedRelease(published, release) {
     release.integrity,
     "Published version has different bytes; never overwrite it",
   );
+}
+
+// npm accepts the upload before its malware scan makes the version and selector visible.
+// Reconciliation reads only; neither a stale selector nor a timeout permits another publish.
+export async function waitForPublishedRelease(
+  release,
+  {
+    fetchImpl = globalThis.fetch,
+    timeoutMs = 30 * 60_000,
+    pollIntervalMs = 15_000,
+    now = Date.now,
+    sleep = (milliseconds) =>
+      new Promise((resolve) => {
+        setTimeout(resolve, milliseconds);
+      }),
+    log = console.log,
+  } = {},
+) {
+  assert(Number.isSafeInteger(timeoutMs) && timeoutMs > 0, "Invalid registry visibility budget");
+  assert(
+    Number.isSafeInteger(pollIntervalMs) && pollIntervalMs > 0,
+    "Invalid registry poll interval",
+  );
+  const deadline = now() + timeoutMs;
+  let pending = `version ${release.version}`;
+  const visibilityTimeout = () =>
+    new Error(
+      `npm accepted ${PACKAGE}@${release.version}, but ${pending} is not visible after ${timeoutMs / 1000}s. ` +
+        "Publication was not retried. Verify registry visibility and the maintainer scan status before rerunning the failed publish job; never rerun blindly while the version is invisible. Keep the existing artifact and immutable tag.",
+    );
+  const read = async (selector) => {
+    const remaining = deadline - now();
+    if (remaining <= 0) {
+      throw visibilityTimeout();
+    }
+    try {
+      return await registryVersion(selector, {
+        fetchImpl,
+        timeoutMs: Math.min(30_000, remaining),
+      });
+    } catch (error) {
+      if (error?.name === "TimeoutError" && now() >= deadline) {
+        throw visibilityTimeout();
+      }
+      throw error;
+    }
+  };
+  while (true) {
+    const published = await read(release.version);
+    if (published) {
+      // Conflicting immutable metadata is a terminal failure, never propagation delay.
+      verifyPublishedRelease(published, release);
+      pending = `dist-tag ${release.npmTag}`;
+      const selected = await read(release.npmTag);
+      if (selected?.version === release.version) {
+        verifyPublishedRelease(selected, release);
+        return published;
+      }
+    } else {
+      pending = `version ${release.version}`;
+    }
+    const remaining = deadline - now();
+    if (remaining <= 0) {
+      throw visibilityTimeout();
+    }
+    const delay = Math.min(pollIntervalMs, remaining);
+    log(
+      `npm is still processing ${PACKAGE}@${release.version}; waiting for ${pending}. Checking again in ${delay / 1000}s (${Math.ceil(remaining / 1000)}s remaining).`,
+    );
+    await sleep(delay);
+  }
 }
 
 async function publish(directory) {
@@ -305,16 +382,9 @@ async function publish(directory) {
       REGISTRY,
     ]);
   }
-  // A failed or ambiguous publish is reconciled from exact bytes on rerun, never unpublished.
-  const published = await registryVersion(release.version);
-  assert(published, "Published version is not yet visible in the registry; rerun verification");
-  verifyPublishedRelease(published, release);
-  const selected = await registryVersion(release.npmTag);
-  assert.equal(
-    selected?.version,
-    release.version,
-    `npm ${release.npmTag} selector was not promoted`,
-  );
+  // Once npm accepts the upload, only registry reads follow. A rerun with a visible
+  // exact artifact also waits for selector propagation without publishing it again.
+  await waitForPublishedRelease(release);
   console.log(`Published ${PACKAGE}@${release.version} with ${release.npmTag}`);
 }
 

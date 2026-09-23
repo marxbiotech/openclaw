@@ -613,6 +613,7 @@ src/infra/node-sqlite.ts
 src/infra/non-fatal-cleanup.ts
 src/infra/npm-registry-spec.ts
 src/infra/openclaw-exec-env.ts
+src/infra/openclaw-package-identity.ts
 src/infra/openclaw-root.fs.runtime.ts
 src/infra/openclaw-root.ts
 src/infra/path-case.ts

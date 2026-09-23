@@ -184,7 +184,7 @@ jobs:
     needs: smoke_marxbiotech_npm
     if: ${{ github.event_name == 'push' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 40
     environment: npm-release
     permissions:
       contents: read
