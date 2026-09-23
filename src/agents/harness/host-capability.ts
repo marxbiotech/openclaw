@@ -7,7 +7,6 @@ import {
   installationTargetEnv,
   withInstallationTarget,
 } from "../../infra/installation-target-context.js";
-import { registerMcpToolApprovalBinding } from "../../infra/mcp-tool-approval-binding.js";
 import { prepareSystemRunMutableFileApproval } from "../../infra/system-run-approval-binding.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import {
@@ -46,16 +45,15 @@ import type { AnyAgentTool } from "../tools/common.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   getGatewayToolCallerIdentity,
-  withGatewayToolApprovalOwner,
   withGatewayToolCallerIdentity,
   wrapToolWithGatewayCallerIdentity,
 } from "../tools/gateway-caller-context.js";
-import { callGatewayTool } from "../tools/gateway.js";
 import {
   getCoreTtsToolResultMediaUrls,
   transferCoreTtsToolResultProvenance,
 } from "../tools/tts-tool-result-provenance.js";
 import { bindHarnessContextMedia } from "./context-media.js";
+import { createRunApprovalCapability } from "./host-approval.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
 import {
   registerAgentHarnessBeforeToolCallRetention,
@@ -68,9 +66,6 @@ import { createSessionNodeAuthorities } from "./node-execution-authority.js";
 
 type AgentHarnessHostAttempt = Partial<EmbeddedRunAttemptParams> &
   Pick<EmbeddedRunAttemptParams, "admittedRunContext" | "runId">;
-type AgentHarnessHostApprovalResult = NonNullable<
-  Awaited<ReturnType<AgentHarnessHostCapabilities["waitForApproval"]>>
->;
 
 const MAX_NATIVE_OPERATION_CWD_BYTES = 4096;
 
@@ -559,81 +554,13 @@ export function createAgentHarnessHostCapabilities(params: {
       });
     },
     runBeforeToolCall,
-    requestApproval: async (request) => {
-      assertActive();
-      request.signal?.throwIfAborted();
-      const releaseMcpBinding =
-        request.mcpTool && request.toolCallId && request.isMcpToolApprovalActive && attempt.agentId
-          ? registerMcpToolApprovalBinding({
-              authority: delegatedAuthority,
-              agentId: attempt.agentId,
-              toolCallId: request.toolCallId,
-              ...request.mcpTool,
-              isActive: () => {
-                assertActive();
-                return !request.signal?.aborted && request.isMcpToolApprovalActive!();
-              },
-            })
-          : undefined;
-      try {
-        const result = await withCaller(
-          async () =>
-            await withGatewayToolApprovalOwner(
-              params.pluginId,
-              async () =>
-                await callGatewayTool(
-                  "plugin.approval.request",
-                  { timeoutMs: request.transportTimeoutMs ?? request.timeoutMs },
-                  {
-                    title: request.title,
-                    description: request.description,
-                    severity: request.severity,
-                    toolName: request.toolName,
-                    toolCallId: request.toolCallId,
-                    ...(request.mcpTool ? { mcpTool: request.mcpTool } : {}),
-                    timeoutMs: request.timeoutMs,
-                    twoPhase: true,
-                    ...(request.allowedDecisions
-                      ? { allowedDecisions: request.allowedDecisions }
-                      : {}),
-                  },
-                  { expectFinal: false, requireAgentRuntimeIdentity: true, signal: request.signal },
-                ),
-            ),
-          request.signal,
-        );
-        // Gateway approval calls may outlive their owning attempt. A late
-        // request result must not escape after exact authority has closed.
-        assertActive();
-        request.signal?.throwIfAborted();
-        return result;
-      } finally {
-        releaseMcpBinding?.();
-      }
-    },
-    waitForApproval: async (request) => {
-      assertActive();
-      const result = await withCaller(
-        async () =>
-          await callGatewayTool<{ id?: string } & Partial<AgentHarnessHostApprovalResult>>(
-            "plugin.approval.waitDecision",
-            { timeoutMs: request.transportTimeoutMs ?? request.timeoutMs },
-            { id: request.approvalId },
-            { signal: request.signal },
-          ),
-        request.signal,
-      );
-      // An allowed decision is useful only while this exact admitted owner is
-      // still live; fail closed if closure raced the awaited Gateway result.
-      assertActive();
-      if (result?.id !== request.approvalId) {
-        return undefined;
-      }
-      return {
-        decision: result.decision,
-        terminalReason: result.terminalReason,
-      };
-    },
+    ...createRunApprovalCapability({
+      pluginId: params.pluginId,
+      agentId: attempt.agentId,
+      delegatedAuthority,
+      assertActive,
+      withCaller,
+    }),
   });
   registerAgentHarnessScheduledToolProjectionCapability({
     hostCapabilities: capabilities,

@@ -1,6 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { shouldRouteCompletionThroughRequesterSession } from "../auto-reply/reply/completion-delivery-policy.js";
-import { channelSupportsThreadDelivery } from "../channels/thread-addressing.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { withSystemEventOwner } from "../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
@@ -105,29 +104,6 @@ export function canDeliverToRequesterOrigin(origin: TaskDeliveryState["requester
   return Boolean(channel && to && isDeliverableMessageChannel(channel));
 }
 
-function canDeliverParentReviewTaskToThreadOrigin(
-  task: TaskRecord,
-  owner: TaskDeliveryOwner,
-): boolean {
-  if (!shouldUseParentReviewTaskTerminalMessage(task)) {
-    return false;
-  }
-  const origin = owner.requesterOrigin;
-  const threadId = String(origin?.threadId ?? "").trim();
-  // Parent-review terminal messages may deliver directly only when the requester origin
-  // already names a concrete thread on a transport that declares thread-addressed
-  // delivery; root-level origins keep routing through the parent session.
-  // Deliberately no target-shape parsing here: threadId provenance is the channel's own
-  // route/binding projection, so core trusts the tuple. A stray threadId on a non-thread
-  // target degrades to delivery at that origin's root, and send failures fall back to the
-  // parent-session queue below — the handoff cannot be lost.
-  return Boolean(
-    threadId &&
-    channelSupportsThreadDelivery(origin?.channel) &&
-    canDeliverToRequesterOrigin(origin),
-  );
-}
-
 function resolveMissingOwnerDeliveryStatus(task: TaskRecord): TaskDeliveryStatus {
   return task.scopeKind === "system" ? "not_applicable" : "parent_missing";
 }
@@ -208,8 +184,6 @@ type TaskTerminalDelivery = {
   latest: TaskRecord;
   owner: TaskDeliveryOwner;
   ownerSessionKey: string;
-  shouldDeliverParentReviewDirect: boolean;
-  sessionEventText: string;
 };
 function getPeerTasksForDelivery(task: TaskRecord): TaskRecord[] {
   if (!task.runId?.trim()) {
@@ -230,6 +204,26 @@ type PreparedTaskTerminalDelivery = { result: TaskRecord | null } | TaskTerminal
 
 type ReadSubagentRun =
   (typeof import("../agents/subagents/registry/subagent-registry-read.js"))["getLatestSubagentRunByChildSessionKey"];
+
+function hasSubagentCompletionOwner(task: TaskRecord, readSubagentRun?: ReadSubagentRun): boolean {
+  if (
+    !shouldUseParentReviewTaskTerminalMessage(task) ||
+    !task.runId ||
+    !task.childSessionKey ||
+    !readSubagentRun
+  ) {
+    return false;
+  }
+  const entry = readSubagentRun(task.childSessionKey);
+  return Boolean(
+    entry &&
+    entry.runId === task.runId &&
+    entry.childSessionKey === task.childSessionKey &&
+    entry.requesterSessionKey === task.ownerKey &&
+    resolveTaskSessionAgentId(entry.requesterSessionKey, entry.requesterAgentId) ===
+      resolveTaskSessionAgentId(task.ownerKey, task.requesterAgentId),
+  );
+}
 
 function isSubagentSettlementPending(task: TaskRecord, readSubagentRun?: ReadSubagentRun): boolean {
   if (task.runtime !== "subagent" || !task.runId || !task.childSessionKey || !readSubagentRun) {
@@ -256,6 +250,13 @@ function prepareTaskTerminalDelivery(
     isSubagentSettlementPending(latest, readSubagentRun)
   ) {
     return { result: latest ? cloneTaskRecord(latest) : null };
+  }
+  if (hasSubagentCompletionOwner(latest, readSubagentRun)) {
+    // The ACP row mirrors execution. Its registered spawn already owns result
+    // delivery (including inline/silent policy), retries, and requester settlement.
+    return {
+      result: updateTask(taskId, { deliveryStatus: "not_applicable", lastEventAt: Date.now() }),
+    };
   }
   const peers = latest.runId ? getPeerTasksForDelivery(latest) : [];
   const isSubagentCancellation = latest.runtime === "subagent" && latest.status === "cancelled";
@@ -293,14 +294,14 @@ function prepareTaskTerminalDelivery(
     };
   }
   const shouldRouteParentReview = shouldUseParentReviewTaskTerminalMessage(latest);
-  const shouldDeliverParentReviewDirect = canDeliverParentReviewTaskToThreadOrigin(latest, owner);
-  const canDeliverDirect =
-    canDeliverTaskToRequesterOrigin(owner) || shouldDeliverParentReviewDirect;
+  const canDeliverDirect = canDeliverTaskToRequesterOrigin(owner);
   const sessionEventText = formatTaskTerminalMessage(
     latest,
     shouldRouteParentReview ? { surface: "parent_session" } : undefined,
   );
-  if ((shouldRouteParentReview && !shouldDeliverParentReviewDirect) || !canDeliverDirect) {
+  // A delegated result belongs to the parent review turn, even when its origin
+  // names a thread. Keep the route on the wake instead of exposing the handoff.
+  if (shouldRouteParentReview || !canDeliverDirect) {
     try {
       queueTaskSystemEvent(latest, sessionEventText, owner);
       if (latest.terminalOutcome === "blocked") {
@@ -322,7 +323,7 @@ function prepareTaskTerminalDelivery(
       return { result: updateTask(taskId, { deliveryStatus: "failed", lastEventAt: Date.now() }) };
     }
   }
-  return { latest, owner, ownerSessionKey, shouldDeliverParentReviewDirect, sessionEventText };
+  return { latest, owner, ownerSessionKey };
 }
 
 async function maybeDeliverTaskTerminalUpdateUnderAdmission(
@@ -331,10 +332,12 @@ async function maybeDeliverTaskTerminalUpdateUnderAdmission(
   let claimed = false;
   try {
     const candidate = tasks.get(taskId);
-    // Native cancellation may still owe its requester a complete sibling batch.
-    // Resolve its owner lazily, then recheck current rows at each delivery boundary.
+    // Cancellation may owe a sibling batch; registered ACP spawns already have a
+    // completion owner. Resolve it lazily and recheck at each delivery boundary.
     const readSubagentRun =
-      candidate?.runtime === "subagent" && candidate.status === "cancelled"
+      candidate &&
+      ((candidate.runtime === "subagent" && candidate.status === "cancelled") ||
+        shouldUseParentReviewTaskTerminalMessage(candidate))
         ? (await import("../agents/subagents/registry/subagent-registry-read.js"))
             .getLatestSubagentRunByChildSessionKey
         : undefined;
@@ -382,13 +385,7 @@ async function maybeDeliverTaskTerminalUpdateUnderAdmission(
             if ("result" in fresh) {
               return fresh.result;
             }
-            const {
-              latest,
-              owner,
-              ownerSessionKey,
-              shouldDeliverParentReviewDirect,
-              sessionEventText,
-            } = fresh;
+            const { latest, owner, ownerSessionKey } = fresh;
             const requesterAgentId = owner.agentId;
             const inspectUrl = latest.childSessionKey
               ? resolveTaskControlUiSessionUrl?.({
@@ -397,9 +394,7 @@ async function maybeDeliverTaskTerminalUpdateUnderAdmission(
                     parseAgentSessionKey(latest.childSessionKey)?.agentId ?? requesterAgentId,
                 })
               : undefined;
-            const directEventText = shouldDeliverParentReviewDirect
-              ? sessionEventText
-              : formatTaskTerminalMessage(latest);
+            const directEventText = formatTaskTerminalMessage(latest);
             const idempotencyKey = resolveTaskTerminalIdempotencyKey(latest, owner);
             invocation.send = {
               facts: fresh,

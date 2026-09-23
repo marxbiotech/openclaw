@@ -28,10 +28,17 @@ afterEach(() => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-function launch(source: "session-full" | "human-approved", whilePreparing: () => void = () => {}) {
+const authorizationSources = ["session-full", "human-approved", "configured-policy"] as const;
+
+function launch(
+  source: (typeof authorizationSources)[number],
+  whilePreparing: () => void = () => {},
+) {
   const spawn = vi.fn();
   const controller = new AbortController();
   const registry = createEmptyPluginRegistry();
+  let retainedPrepare: (() => () => void) | undefined;
+  let retainedGuard: (() => void) | undefined;
   registry.plugins.push(
     createPluginRecord({
       id: "fixture",
@@ -49,7 +56,13 @@ function launch(source: "session-full" | "human-approved", whilePreparing: () =>
       command: "fixture.exec",
       dangerous: true,
       handle: async (_params, _io, context) => {
-        const assertAuthorized = context!.prepareExecAuthorization!(source);
+        const prepare =
+          source === "configured-policy"
+            ? context!.prepareConfiguredExecAuthorization!
+            : () => context!.prepareExecAuthorization!(source);
+        retainedPrepare = prepare;
+        const assertAuthorized = prepare();
+        retainedGuard = assertAuthorized;
         await Promise.resolve();
         whilePreparing();
         assertAuthorized();
@@ -64,7 +77,13 @@ function launch(source: "session-full" | "human-approved", whilePreparing: () =>
     sessionKey: "agent:main:session",
     signal: controller.signal,
   });
-  return { result, spawn, controller, registry };
+  return {
+    result,
+    spawn,
+    controller,
+    registry,
+    getRetainedAuthorization: () => ({ prepare: retainedPrepare, guard: retainedGuard }),
+  };
 }
 
 function setPolicy(owner: "config" | "approvals", security: ExecSecurity, ask: ExecAsk) {
@@ -77,11 +96,11 @@ function setPolicy(owner: "config" | "approvals", security: ExecSecurity, ask: E
 
 describe("plugin node execution authorization", () => {
   it.each(["config", "approvals"] as const)(
-    "keeps %s restrictions for Full and explicit human decisions",
+    "keeps %s restrictions for Full, configured policy, and explicit human decisions",
     async (owner) => {
       for (const security of ["full", "allowlist", "deny"] as const) {
         for (const ask of ["off", "on-miss", "always"] as const) {
-          for (const source of ["session-full", "human-approved"] as const) {
+          for (const source of authorizationSources) {
             setPolicy(owner, security, ask);
             const { result, spawn } = launch(source);
             const allowed =
@@ -104,7 +123,7 @@ describe("plugin node execution authorization", () => {
   it.each(["config", "approvals"] as const)(
     "refuses %s tightening during awaited setup",
     async (owner) => {
-      for (const source of ["session-full", "human-approved"] as const) {
+      for (const source of authorizationSources) {
         for (const [security, ask] of [
           ["deny", "off"],
           ["allowlist", "off"],
@@ -119,18 +138,62 @@ describe("plugin node execution authorization", () => {
     },
   );
 
-  it.each(["cancel", "plugin-replaced"] as const)(
+  it.each(["cancel", "plugin-replaced", "plugin-disabled", "command-replaced"] as const)(
     "refuses %s during awaited setup",
     async (reason) => {
-      const invocation = launch("session-full", () => {
-        if (reason === "cancel") {
-          invocation.controller.abort();
-        } else {
-          setActivePluginRegistry(createEmptyPluginRegistry());
-        }
-      });
-      await expect(invocation.result).rejects.toThrow("authority is closed");
+      for (const source of authorizationSources) {
+        const invocation = launch(source, () => {
+          if (reason === "cancel") {
+            invocation.controller.abort();
+          } else if (reason === "plugin-replaced") {
+            setActivePluginRegistry(createEmptyPluginRegistry());
+          } else if (reason === "plugin-disabled") {
+            const plugin = invocation.registry.plugins[0];
+            if (!plugin) {
+              throw new Error("Expected the registered fixture plugin");
+            }
+            plugin.enabled = false;
+          } else {
+            const registration = invocation.registry.nodeHostCommands[0];
+            if (!registration) {
+              throw new Error("Expected the registered fixture command");
+            }
+            registration.command = { ...registration.command };
+          }
+        });
+        await expect(invocation.result).rejects.toThrow("authority is closed");
+        expect(invocation.spawn).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it.each(["config", "approvals"] as const)(
+    "respects the invocation agent's %s policy over permissive global defaults",
+    async (owner) => {
+      if (owner === "config") {
+        setRuntimeConfigSnapshot({
+          tools: { exec: { security: "full", ask: "off" } },
+          agents: { list: [{ id: "main", tools: { exec: { security: "deny" } } }] },
+        });
+      } else {
+        saveExecApprovals({
+          version: 1,
+          defaults: { security: "full", ask: "off" },
+          agents: { main: { security: "deny" } },
+        });
+      }
+      const invocation = launch("configured-policy");
+      await expect(invocation.result).rejects.toThrow();
       expect(invocation.spawn).not.toHaveBeenCalled();
     },
   );
+
+  it("closes retained configured-policy preparers and guards when the invocation settles", async () => {
+    const invocation = launch("configured-policy");
+    await expect(invocation.result).resolves.toBe("{}");
+    expect(invocation.spawn).toHaveBeenCalledOnce();
+    const retained = invocation.getRetainedAuthorization();
+    expect(retained.prepare).toThrow("authority is closed");
+    expect(retained.guard).toThrow("authority is closed");
+  });
 });

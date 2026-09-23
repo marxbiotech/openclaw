@@ -309,8 +309,9 @@ export async function resolveUpdateCommandTarget(
       packageInstallSpec = extendedStable.packageSpec;
     } else if (explicitTag) {
       targetVersion = await resolveTargetVersion(tag, timeoutMs, {
+        packageName: installedPackageName,
         spec: resolveGlobalInstallSpec({
-          packageName: DEFAULT_PACKAGE_NAME,
+          packageName: installedPackageName,
           tag,
           env: packageInstallEnv,
         }),
@@ -320,6 +321,7 @@ export async function resolveUpdateCommandTarget(
       });
     } else {
       targetVersion = await resolveNpmChannelTag({
+        packageName: installedPackageName,
         channel,
         timeoutMs,
         command: npmMetadataCommand,
@@ -334,7 +336,7 @@ export async function resolveUpdateCommandTarget(
     const cmp =
       currentVersion && targetVersion ? compareSemverStrings(currentVersion, targetVersion) : null;
     packageInstallSpec ??= resolveGlobalInstallSpec({
-      packageName: DEFAULT_PACKAGE_NAME,
+      packageName: installedPackageName,
       tag,
       env: packageInstallEnv,
     });
@@ -349,9 +351,10 @@ export async function resolveUpdateCommandTarget(
       (targetVersion == null ? tag !== "latest" : cmp != null && cmp > 0);
     if (targetVersion) {
       const targetMetadata = await fetchNpmPackageTargetStatus({
+        packageName: installedPackageName,
         target: targetVersion,
         spec: resolveGlobalInstallSpec({
-          packageName: DEFAULT_PACKAGE_NAME,
+          packageName: installedPackageName,
           tag: targetVersion,
           env: packageInstallEnv,
         }),
@@ -363,7 +366,7 @@ export async function resolveUpdateCommandTarget(
       if (targetMetadata.error || targetMetadata.version !== targetVersion) {
         await refuseUpdate(
           "target-metadata-preflight",
-          `Update refused: could not inspect exact package target openclaw@${targetVersion}: ${targetMetadata.error ?? `registry returned version ${targetMetadata.version ?? "unknown"}`}.`,
+          `Update refused: could not inspect exact package target ${installedPackageName}@${targetVersion}: ${targetMetadata.error ?? `registry returned version ${targetMetadata.version ?? "unknown"}`}.`,
         );
         return undefined;
       }
@@ -377,7 +380,7 @@ export async function resolveUpdateCommandTarget(
       // only means the schema preflight cannot run (legacy target).
       if (updateInstallKind === "package" && canResolveRegistryVersionForPackageTarget(tag)) {
         packageInstallSpec = resolveGlobalInstallSpec({
-          packageName: DEFAULT_PACKAGE_NAME,
+          packageName: installedPackageName,
           tag: targetVersion,
           env: packageInstallEnv,
         });

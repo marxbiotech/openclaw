@@ -908,6 +908,10 @@
     "./plugin-sdk/windows-spawn": {
       "default": "./dist/plugin-sdk/windows-spawn.js"
     },
+    "./plugin-sdk/acp-backend": {
+      "types": "./dist/plugin-sdk/acp-backend.d.ts",
+      "default": "./dist/plugin-sdk/acp-backend.js"
+    },
     "./plugin-sdk/acp-runtime": {
       "default": "./dist/plugin-sdk/acp-runtime.js"
     },

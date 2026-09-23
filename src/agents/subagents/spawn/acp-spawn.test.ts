@@ -3248,6 +3248,7 @@ describe("spawnAcpDirect", () => {
       parentSessionKey: "agent:main:main",
       agentId: "codex",
       childSessionId: "sess-123",
+      childSessionStorePath: "/tmp/codex-sessions.json",
       emitStartNotice: false,
     });
     const relayRuns = hoisted.startAcpSpawnParentStreamRelayMock.mock.calls.map(

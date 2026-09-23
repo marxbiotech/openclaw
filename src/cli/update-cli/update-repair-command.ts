@@ -3,7 +3,7 @@ import {
   readConfigFileSnapshot,
 } from "../../config/config.js";
 import { resolveGatewayPort } from "../../config/paths.js";
-import { readPackageVersion } from "../../infra/package-json.js";
+import { readPackageName, readPackageVersion } from "../../infra/package-json.js";
 import {
   normalizeUpdateChannel,
   resolveEffectiveUpdateChannel,
@@ -120,6 +120,7 @@ export async function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<
     const snapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
     const root = await resolveUpdateRoot();
     const installedVersion = await readPackageVersion(root);
+    const packageName = (await readPackageName(root)) ?? undefined;
     const { channel } = resolveEffectiveUpdateChannel({
       configChannel: normalizeUpdateChannel(
         lastRun.target.channel ?? snapshot.config.update?.channel,
@@ -131,8 +132,8 @@ export async function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<
       const targetVersion =
         lastRun.target.version ??
         (lastRun.target.tag
-          ? await resolveTargetVersion(lastRun.target.tag, timeoutMs, { env })
-          : (await resolveNpmChannelTag({ channel, timeoutMs, env })).version);
+          ? await resolveTargetVersion(lastRun.target.tag, timeoutMs, { env, packageName })
+          : (await resolveNpmChannelTag({ channel, timeoutMs, env, packageName })).version);
       await assertUpdateRecoveryAdmission(options);
       // Registry resolution awaited I/O; inspect the installed version again before recording recovery.
       const currentVersion = await readPackageVersion(root);

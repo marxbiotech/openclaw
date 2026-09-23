@@ -204,7 +204,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +3: typed feature contracts, backend registration, and native Control UI hosting.
       // +1: public provider-owned asynchronous embedding batch contract.
       // +1: runtime-neutral WebSocket client/server adapter for bundled and external plugins.
-      154,
+      // +1: ACP execution-backend registration without owning the control plane.
+      155,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -376,7 +377,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +13: runtime-neutral WebSocket client/server, stream, data, and option contracts.
       // +2: approved process-diagnostics predicate and lightweight subsystem logger.
       // +1: approved shared native-command argument-menu applicability predicate.
-      4482,
+      // +22: ACP execution-backend registration contract and its runtime types.
+      4504,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -516,7 +518,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +4: runtime-neutral WebSocket client/server and stream constructors.
       // +2: approved process-diagnostics predicate and lightweight subsystem logger.
       // +1: approved shared native-command argument-menu applicability predicate.
-      2646,
+      // +5: ACP backend registration, lookup, error guard, and reply-hook dispatch.
+      2651,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

@@ -17,6 +17,7 @@ import {
 } from "../../../scripts/lib/package-lifecycle-marker.mjs";
 import { validateBundledPackageDependencyAlignment } from "../../../scripts/package-source-dependencies.mjs";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+import { isOpenClawPackageName } from "../../infra/openclaw-package-identity.js";
 import {
   collectPackageDistInventory,
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
@@ -198,7 +199,7 @@ async function prepareNodeBootstrapArtifact(
 ): Promise<NodeBootstrapArtifact> {
   const packageRoot = await fs.realpath(options.packageRoot);
   const sourcePackage = await readPackageManifest(packageRoot);
-  if (sourcePackage.name !== "openclaw") {
+  if (!isOpenClawPackageName(sourcePackage.name)) {
     throw new Error("Node bootstrap requires the running OpenClaw package root");
   }
   const buildInfoPath = path.join(packageRoot, "dist", "build-info.json");

@@ -21,6 +21,62 @@ Docker images without moving regular `latest` or `main` selectors.
 
 Tideclaw alpha builds are a separate internal prerelease track (npm dist-tag `alpha`), covered under [NPM workflow inputs](#npm-workflow-inputs) and [Release test boxes](#release-test-boxes).
 
+## Marxbiotech fork npm releases
+
+In `marxbiotech/openclaw`, every pushed `mb*` tag triggers the fork lane in
+`.github/workflows/openclaw-npm-release.yml`. Use an immutable lightweight tag
+such as `mb2026.9.5` or `mb2026.9.5-beta.1`; its base version must match the source
+`package.json`. Malformed or mismatched tags fail before publication.
+
+The fork publishes `@marxbiotech/openclaw`, retaining the `openclaw` executable
+and plugin SDK contracts. Stable tags publish to npm `latest`, alpha prereleases
+to `alpha`, and other prereleases to `beta`. Existing installations of this
+scoped package keep the scoped package as their update source.
+
+The workflow builds through the canonical package owner, adapts only the npm
+distribution metadata, checks the resulting tarball, and installs those exact
+bytes on a clean Linux runner. CLI, bundled plugin discovery, public ACP SDK,
+native filesystem support, and update-source checks must pass before the
+`npm-release` environment publishes with OIDC provenance. Keep the workflow
+filename unchanged because the npm trusted publisher is bound to it. The
+matching Docker workflow publishes the same `mb` tag independently.
+
+Before creating an immutable tag, dispatch the same workflow from the reviewed
+branch with `preflight_only=true` and `tag=mb2026.9.5`. This fork preflight builds
+and runs the Linux install checks without requiring the tag to exist. Manual
+dispatch never publishes the fork package; only a tag push can enter publication.
+
+For a local package check before tagging:
+
+```bash
+node scripts/marxbiotech-npm-release.mjs pack mb2026.9.5 /tmp/openclaw-npm-candidate
+node scripts/marxbiotech-npm-release.mjs smoke /tmp/openclaw-npm-candidate
+```
+
+Use a fresh output directory. The artifact's `release.json` records its exact
+version, source commit, and integrity. npm scans accepted publications before
+they become installable, typically taking several minutes. The publish job
+waits up to 30 minutes for the exact version, integrity, and selected dist-tag
+to become visible. If this wait expires, check registry visibility and the npm
+maintainer scan status before rerunning; do not submit another publication while
+the accepted version is still processing. Once visible, rerun the failed job
+with its existing artifact to reconcile without publishing again. Never rebuild
+or move a published tag to repair a release. A registry version with different
+bytes is rejected. After publication, download
+the workflow's exact `marxbiotech-npm-release` artifact and run
+`node scripts/marxbiotech-npm-release.mjs verify <artifact-directory>` to verify
+integrity and a fresh registry installation. Dist-tag updates require
+normal npm authentication because OIDC supports publication only. To promote a
+stable version to both channels after verifying its publication:
+
+```bash
+npm dist-tag add @marxbiotech/openclaw@2026.9.5 latest
+npm dist-tag add @marxbiotech/openclaw@2026.9.5 beta
+npm view @marxbiotech/openclaw dist-tags --json
+```
+
+The remaining release procedures below describe upstream publication.
+
 ## Version naming
 
 - Monthly Gateway extended-stable release version: `YYYY.M.PATCH`, with `PATCH >= 33`, git tag `vYYYY.M.PATCH`

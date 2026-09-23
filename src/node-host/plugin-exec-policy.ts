@@ -11,9 +11,9 @@ import { resolveNodeExecConfigPolicy } from "./exec-policy.js";
 
 /** Local policy stays on the executor; Gateway approval never overrides a local deny. */
 export function preparePluginExecAuthorization(params: {
-  source: Parameters<
-    NonNullable<OpenClawPluginNodeHostCommandContext["prepareExecAuthorization"]>
-  >[0];
+  source:
+    | Parameters<NonNullable<OpenClawPluginNodeHostCommandContext["prepareExecAuthorization"]>>[0]
+    | "configured-policy";
   command: string;
   sessionKey?: string;
   assertActive: () => void;
@@ -38,7 +38,7 @@ export function preparePluginExecAuthorization(params: {
       current.security !== policy.security ||
       current.ask !== policy.ask ||
       current.autoReview !== policy.autoReview ||
-      (params.source === "session-full" && (current.security !== "full" || current.ask !== "off"))
+      (params.source !== "human-approved" && (current.security !== "full" || current.ask !== "off"))
     ) {
       throw new Error("SYSTEM_RUN_DENIED: node-local exec policy does not authorize this launch");
     }

@@ -12,6 +12,7 @@ import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { openRootFileSync, readFileDescriptorBoundedSync } from "./boundary-file-read.js";
 import { FsSafeError } from "./fs-safe.js";
+import { isOpenClawPackageName } from "./openclaw-package-identity.js";
 import { resolveOpenClawPackageRoot, resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 
 export function formatControlUiSourceCommand(root: string, action: "build" | "dev"): string {
@@ -119,7 +120,7 @@ async function resolveControlUiDistIndexPath(
         try {
           const raw = fs.readFileSync(pkgJsonPath, "utf-8");
           const parsed = JSON.parse(raw) as { name?: unknown };
-          if (parsed.name === "openclaw") {
+          if (isOpenClawPackageName(parsed.name)) {
             return fs.existsSync(indexPath) ? indexPath : null;
           }
           // Stop at the first package boundary to avoid resolving through unrelated ancestors.

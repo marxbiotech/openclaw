@@ -610,32 +610,39 @@ describe("worker bundle producer", () => {
 });
 
 describe("worker npm installation artifact", () => {
-  it("uses an exact registry-proven gateway package", async () => {
-    await withTestDir({ prefix: "openclaw-worker-npm-release-" }, async (packageRoot) => {
-      await writeFixture(packageRoot);
-      const packageIntegrity = `sha512-${Buffer.alloc(64).toString("base64")}`;
-      const verifyRelease = vi.fn(async () => packageIntegrity);
+  it.each(["openclaw", "@marxbiotech/openclaw"])(
+    "uses the exact registry-proven %s gateway package",
+    async (packageName) => {
+      await withTestDir({ prefix: "openclaw-worker-npm-release-" }, async (packageRoot) => {
+        await writeFixture(packageRoot);
+        const manifestPath = path.join(packageRoot, "package.json");
+        const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+        await fs.writeFile(manifestPath, JSON.stringify({ ...manifest, name: packageName }));
+        const packageIntegrity = `sha512-${Buffer.alloc(64).toString("base64")}`;
+        const verifyRelease = vi.fn(async () => packageIntegrity);
 
-      const artifact = await resolveWorkerNpmInstallationArtifact({
-        bundle: bundleArtifact({ protocolFeatures: ["admission"] }),
-        packageRoot,
-        verifyRelease,
-      });
+        const artifact = await resolveWorkerNpmInstallationArtifact({
+          bundle: bundleArtifact({ protocolFeatures: ["admission"] }),
+          packageRoot,
+          verifyRelease,
+        });
 
-      expect(verifyRelease).toHaveBeenCalledWith({
-        bundleHash: "a".repeat(64),
-        version: "1.2.3",
+        expect(verifyRelease).toHaveBeenCalledWith({
+          packageName,
+          bundleHash: "a".repeat(64),
+          version: "1.2.3",
+        });
+        expect(artifact).toEqual({
+          install: "npm",
+          bundleHash: "a".repeat(64),
+          openclawVersion: "1.2.3",
+          packageIntegrity,
+          protocolFeatures: ["admission"],
+          packageSpec: `${packageName}@1.2.3`,
+        });
       });
-      expect(artifact).toEqual({
-        install: "npm",
-        bundleHash: "a".repeat(64),
-        openclawVersion: "1.2.3",
-        packageIntegrity,
-        protocolFeatures: ["admission"],
-        packageSpec: "openclaw@1.2.3",
-      });
-    });
-  });
+    },
+  );
 
   it("rejects dev and packages that fail release verification", async () => {
     const verifyRelease = vi.fn(async (): Promise<string> => {

@@ -5,7 +5,9 @@ import path from "node:path";
 import * as tar from "tar";
 import { resolveStateDir } from "../../config/paths.js";
 import { isExactSemverVersion, resolveNpmJsonEntries } from "../../infra/npm-registry-spec.js";
+import { isOpenClawPackageName } from "../../infra/openclaw-package-identity.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
+import { readPackageName } from "../../infra/package-json.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import {
@@ -67,6 +69,7 @@ type WorkerNpmPackageInstallCheck = (packageRoot: string) => Promise<boolean>;
 type WorkerNpmReleaseVerifier = (params: {
   bundleHash: string;
   version: string;
+  packageName: string;
 }) => Promise<string>;
 type WorkerNpmProofCommandRunner = typeof runCommandWithTimeout;
 
@@ -193,6 +196,7 @@ async function hashWorkerBundleTarball(tarballPath: string): Promise<string> {
 async function verifyPublishedNpmRelease(params: {
   bundleHash: string;
   version: string;
+  packageName: string;
   runCommand?: WorkerNpmProofCommandRunner;
 }): Promise<string> {
   const runCommand = params.runCommand ?? runCommandWithTimeout;
@@ -206,7 +210,7 @@ async function verifyPublishedNpmRelease(params: {
           argv: [
             "npm",
             "view",
-            `openclaw@${params.version}`,
+            `${params.packageName}@${params.version}`,
             "name",
             "version",
             "dist.integrity",
@@ -220,19 +224,19 @@ async function verifyPublishedNpmRelease(params: {
       ),
     );
     if (
-      published?.name !== "openclaw" ||
+      published?.name !== params.packageName ||
       published.version !== params.version ||
       !NPM_SHA512_INTEGRITY_PATTERN.test(published.integrity)
     ) {
       throw new Error(
-        `Cannot verify exact public npm release openclaw@${params.version}; use the worker bundle install`,
+        `Cannot verify exact public npm release ${params.packageName}@${params.version}; use the worker bundle install`,
       );
     }
     const packedValue = await runNpmProofCommand({
       argv: [
         "npm",
         "pack",
-        `openclaw@${params.version}`,
+        `${params.packageName}@${params.version}`,
         "--pack-destination",
         temporaryRoot,
         "--ignore-scripts",
@@ -560,7 +564,12 @@ export async function resolveWorkerNpmInstallationArtifact(params: {
       "Worker npm install requires the gateway to run from a packaged release install",
     );
   }
+  const packageName = await readPackageName(packageRoot);
+  if (!isOpenClawPackageName(packageName)) {
+    throw new Error("Worker npm install requires a recognized OpenClaw distribution");
+  }
   const packageIntegrity = await (params.verifyRelease ?? verifyPublishedNpmRelease)({
+    packageName,
     bundleHash: params.bundle.bundleHash,
     version,
   });
@@ -570,6 +579,6 @@ export async function resolveWorkerNpmInstallationArtifact(params: {
     openclawVersion: version,
     packageIntegrity,
     protocolFeatures: params.bundle.protocolFeatures,
-    packageSpec: `openclaw@${version}`,
+    packageSpec: `${packageName}@${version}`,
   };
 }

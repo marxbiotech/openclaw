@@ -8,6 +8,7 @@ import { LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH } from "../../scripts/lib/pa
 import { UPDATE_GLOBAL_PERMISSION_REASON } from "../shared/update-outcome.js";
 import { resolveBunGlobalInstallOwner } from "./detect-package-manager.js";
 import { formatErrorMessage } from "./errors.js";
+import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
 import { collectPackageDistContentInventoryErrors } from "./package-dist-inventory.js";
 import { readPackageVersion } from "./package-json.js";
 import { completePendingPackageLifecycle } from "./package-lifecycle.js";
@@ -54,6 +55,7 @@ import {
   resolveNpmLifecyclePolicyGate,
   resolveExpectedInstalledVersionFromSpec,
   resolveGlobalInstallTarget,
+  resolveInstalledPackageName,
   verifyPackageUpdateRecovery,
   type ResolvedGlobalInstallTarget,
 } from "./update-global.js";
@@ -562,7 +564,7 @@ async function cleanupStagedPackageInstall(stage: StagedPackageInstall | null): 
  * Runs the global package update flow, including npm staging when possible,
  * package verification, optional post-verification, and cleanup.
  */
-export async function runGlobalPackageUpdateSteps(params: {
+export async function runGlobalPackageUpdateSteps(input: {
   installTarget: ResolvedGlobalInstallTarget;
   installSpec: string;
   packageName: string;
@@ -582,6 +584,31 @@ export async function runGlobalPackageUpdateSteps(params: {
   activateGitRoot?: string;
   localOverrides?: { reapply: boolean; env?: NodeJS.ProcessEnv };
 }): Promise<PackageUpdateStepsResult> {
+  const installedPackageName = resolveInstalledPackageName(
+    input.installTarget.packageRoot,
+    input.packageName,
+  );
+  const aliasPrefix = `${installedPackageName}@npm:`;
+  const registryInstallSpec = input.installSpec.startsWith(aliasPrefix)
+    ? input.installSpec.slice(aliasPrefix.length)
+    : input.installSpec;
+  const expectedVersion = resolveExpectedInstalledVersionFromSpec(
+    input.packageName,
+    registryInstallSpec,
+  );
+  const registryTarget = isRegistrySourceInstallSpec(input.installSpec);
+  const requiresAlias = installedPackageName !== input.packageName;
+  const canPreserveAlias = parseRegistryNpmSpec(registryInstallSpec)?.name === input.packageName;
+  // Keep the dependency key through staging so npm's relative launchers still
+  // point at the package after activation moves it into the existing alias.
+  const params =
+    requiresAlias && canPreserveAlias
+      ? {
+          ...input,
+          packageName: installedPackageName,
+          installSpec: `${aliasPrefix}${registryInstallSpec}`,
+        }
+      : input;
   // Transaction callbacks must never silently become an in-place manager install.
   // FreeBSD pkg ownership also needs staging's exact project and launcher targets;
   // an in-place package-manager command does not expose that replacement set.
@@ -647,6 +674,16 @@ export async function runGlobalPackageUpdateSteps(params: {
   };
 
   try {
+    if (requiresAlias && !canPreserveAlias) {
+      return await packageUpdateFailure({
+        name: "package alias preflight",
+        command: "inspect installed package alias",
+        cwd: originalPackageRoot ?? process.cwd(),
+        durationMs: 0,
+        exitCode: 1,
+        stderrTail: `Updating ${params.packageName} installed as ${installedPackageName} requires a registry version or tag. Artifact and source targets cannot preserve the existing launcher layout; use openclaw update --tag <version> instead. The installed runtime was left unchanged.`,
+      });
+    }
     const permissions = await checkGlobalPackageUpdatePermissions(params.installTarget, params.env);
     if (permissions) {
       return await packageUpdateFailure(permissions);
@@ -1001,10 +1038,6 @@ export async function runGlobalPackageUpdateSteps(params: {
       if (!stagedInstall) {
         afterVersion = candidateVersion;
       }
-      const expectedVersion = resolveExpectedInstalledVersionFromSpec(
-        params.packageName,
-        params.installSpec,
-      );
       let verificationErrors = await collectInstalledGlobalPackageErrors({
         packageRoot: verificationPackageRoot,
         expectedVersion,
@@ -1013,7 +1046,6 @@ export async function runGlobalPackageUpdateSteps(params: {
       // Registry versions identify published releases. Explicit artifacts can
       // be rebuilt at the same version, so compare known build identities before
       // skipping validation. Missing identity is not equality.
-      const registryTarget = isRegistrySourceInstallSpec(params.installSpec);
       let sameArtifact = false;
       if (!registryTarget && originalPackageRoot) {
         const [candidateBuild, installedBuild] = await Promise.all([

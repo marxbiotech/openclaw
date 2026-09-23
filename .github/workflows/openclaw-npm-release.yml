@@ -1,6 +1,8 @@
 name: OpenClaw NPM Release
 
 on:
+  push:
+    tags: ["mb*"]
   workflow_dispatch:
     inputs:
       tag:
@@ -94,14 +96,129 @@ on:
         type: boolean
 
 concurrency:
-  group: ${{ github.event_name == 'workflow_dispatch' && inputs.preflight_only && format('openclaw-npm-release-{0}-{1}-preflight', inputs.tag, inputs.npm_dist_tag) || github.event_name == 'workflow_dispatch' && format('openclaw-npm-release-{0}-{1}-publish-{2}', inputs.tag, inputs.npm_dist_tag, github.run_id) || format('openclaw-npm-release-{0}', github.ref) }}
-  cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' && inputs.preflight_only && inputs.npm_dist_tag == 'alpha' }}
+  group: ${{ github.repository == 'marxbiotech/openclaw' && format('marxbiotech-npm-release-{0}', github.ref) || github.event_name == 'workflow_dispatch' && inputs.preflight_only && format('openclaw-npm-release-{0}-{1}-preflight', inputs.tag, inputs.npm_dist_tag) || github.event_name == 'workflow_dispatch' && format('openclaw-npm-release-{0}-{1}-publish-{2}', inputs.tag, inputs.npm_dist_tag, github.run_id) || format('openclaw-npm-release-{0}', github.ref) }}
+  cancel-in-progress: ${{ github.repository != 'marxbiotech/openclaw' && github.event_name == 'workflow_dispatch' && inputs.preflight_only && inputs.npm_dist_tag == 'alpha' }}
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.19.0"
 
 jobs:
+  # Keep this publisher in the filename already trusted by @marxbiotech/openclaw.
+  # mb tags qualify one artifact without credentials before the OIDC publish job.
+  build_marxbiotech_npm:
+    if: ${{ github.repository == 'marxbiotech/openclaw' && ((github.event_name == 'push' && startsWith(github.ref, 'refs/tags/mb')) || (github.event_name == 'workflow_dispatch' && inputs.preflight_only && startsWith(inputs.tag, 'mb'))) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact source commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Validate fork release identity and source commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          node scripts/marxbiotech-npm-release.mjs identity "$RELEASE_TAG"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          if [[ "$GITHUB_EVENT_NAME" == push ]]; then
+            test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" --jq '.object | select(.type == "commit") | .sha')" = "$GITHUB_SHA"
+          fi
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "true"
+          cache-mode: "off"
+
+      - name: Build scoped npm artifact
+        run: node scripts/marxbiotech-npm-release.mjs pack "$RELEASE_TAG" "$RUNNER_TEMP/marxbiotech-npm"
+
+      - name: Upload exact release artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: marxbiotech-npm-release
+          path: |
+            ${{ runner.temp }}/marxbiotech-npm/release.json
+            ${{ runner.temp }}/marxbiotech-npm/*.tgz
+          if-no-files-found: error
+          retention-days: 30
+
+  smoke_marxbiotech_npm:
+    needs: build_marxbiotech_npm
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact smoke tooling commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
+      - name: Download exact release artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: marxbiotech-npm-release
+          path: ${{ runner.temp }}/marxbiotech-npm
+
+      - name: Verify isolated npm install and runtime
+        run: node scripts/marxbiotech-npm-release.mjs smoke "$RUNNER_TEMP/marxbiotech-npm"
+
+  publish_marxbiotech_npm:
+    needs: smoke_marxbiotech_npm
+    if: ${{ github.event_name == 'push' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    environment: npm-release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout tagged publish tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Setup Node for npm trusted publishing
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
+      - name: Download qualified release artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: marxbiotech-npm-release
+          path: ${{ runner.temp }}/marxbiotech-npm
+
+      - name: Recheck immutable tag before publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$GITHUB_REF_NAME" --jq '.object | select(.type == "commit") | .sha')" = "$GITHUB_SHA"
+
+      - name: Publish qualified bytes with npm provenance
+        run: node scripts/marxbiotech-npm-release.mjs publish "$RUNNER_TEMP/marxbiotech-npm"
+
   # PLEASE DON'T ADD LONG-RUNNING OR FLAKY CHECKS TO THE npm RELEASE PATH.
   # KEEP THIS WORKFLOW SHORT AND DETERMINISTIC OR IT CAN GET STUCK AND JEOPARDIZE THE RELEASE.
   # RELEASE-TIME LIVE OR END-TO-END VALIDATION BELONGS IN openclaw-release-checks.yml.
@@ -109,7 +226,7 @@ jobs:
   # openclaw/releases/.github/workflows/openclaw-npm-dist-tags.yml
   # so this source workflow can stay focused on OIDC publish only.
   preflight_openclaw_npm:
-    if: ${{ inputs.preflight_only }}
+    if: ${{ github.repository != 'marxbiotech/openclaw' && github.event_name == 'workflow_dispatch' && inputs.preflight_only }}
     permissions:
       actions: read
       contents: read
@@ -125,7 +242,7 @@ jobs:
       bypass_extended_stable_guard: ${{ inputs.bypass_extended_stable_guard }}
 
   validate_publish_request:
-    if: ${{ !inputs.preflight_only }}
+    if: ${{ github.repository != 'marxbiotech/openclaw' && github.event_name == 'workflow_dispatch' && !inputs.preflight_only }}
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -311,7 +428,7 @@ jobs:
     # KEEP THE REAL RELEASE/PUBLISH PATH ON A GITHUB-HOSTED RUNNER.
     # npm trusted publishing + provenance requires this to stay on ubuntu-latest.
     needs: [validate_publish_request]
-    if: ${{ !inputs.preflight_only }}
+    if: ${{ github.repository != 'marxbiotech/openclaw' && github.event_name == 'workflow_dispatch' && !inputs.preflight_only }}
     runs-on: ubuntu-latest
     environment: npm-release
     permissions:

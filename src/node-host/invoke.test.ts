@@ -199,6 +199,7 @@ describe("node host invoke", () => {
       sendNodeEvent,
       sessionKey: "agent:main:canvas",
       prepareExecAuthorization: expect.any(Function),
+      prepareConfiguredExecAuthorization: expect.any(Function),
     });
   });
 

@@ -14,7 +14,7 @@ vi.mock("./register.runtime.js", () => ({
   createAcpxRuntimeService: createAcpxRuntimeServiceMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/acp-runtime-backend", () => ({
+vi.mock("openclaw/plugin-sdk/acp-backend", () => ({
   tryDispatchAcpReplyHook: tryDispatchAcpReplyHookMock,
 }));
 

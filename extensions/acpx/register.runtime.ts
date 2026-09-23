@@ -6,7 +6,7 @@ import {
   getAcpRuntimeBackend,
   registerAcpRuntimeBackend,
   unregisterAcpRuntimeBackend,
-} from "openclaw/plugin-sdk/acp-runtime-backend";
+} from "openclaw/plugin-sdk/acp-backend";
 import type { OpenClawPluginService, OpenClawPluginServiceContext } from "openclaw/plugin-sdk/core";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { createLazyAcpRuntimeProxy, type CompleteAcpRuntime } from "./src/runtime-proxy.js";

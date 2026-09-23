@@ -68,6 +68,30 @@ describe("npm global install lifecycle policy", () => {
     ).not.toContain("--allow-scripts=openclaw");
   });
 
+  it("allows the fork lifecycle for scoped packages and npm aliases", () => {
+    for (const spec of [
+      "@marxbiotech/openclaw@2026.9.5",
+      "openclaw@npm:@marxbiotech/openclaw@2026.9.5",
+    ]) {
+      expect(globalInstallArgs("npm", spec)).toContain("--allow-scripts=@marxbiotech/openclaw");
+      expect(globalInstallFallbackArgs("npm", spec)).toContain(
+        "--allow-scripts=@marxbiotech/openclaw",
+      );
+      expect(globalInstallArgs("pnpm", spec)).toContain("--allow-build=@marxbiotech/openclaw");
+    }
+    expect(globalInstallArgs("bun", "@marxbiotech/openclaw@2026.9.5")).toContain(
+      "@marxbiotech/openclaw@2026.9.5",
+    );
+  });
+
+  it("preserves the existing lifecycle policy for unrelated registry package names", () => {
+    for (const spec of ["unrelated@1.0.0", "@vendor/unrelated@1.0.0"]) {
+      expect(globalInstallArgs("npm", spec)).toContain("--allow-scripts=openclaw");
+      expect(globalInstallFallbackArgs("npm", spec)).toContain("--allow-scripts=openclaw");
+      expect(globalInstallArgs("pnpm", spec)).toContain("--allow-build=openclaw");
+    }
+  });
+
   it("allows only the resolved npm candidate lifecycle identity", () => {
     const archive = path.resolve("/tmp/openclaw-2026.7.2.tgz");
     expect(globalInstallArgs("npm", archive)).toContain(`--allow-scripts=${archive}`);

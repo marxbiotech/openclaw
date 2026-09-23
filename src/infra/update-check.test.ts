@@ -219,6 +219,31 @@ describe("resolveNpmChannelTag", () => {
     runCommand = runCommandMock;
   });
 
+  it("keeps both beta and latest metadata queries on the installed fork", async () => {
+    versionByTag.beta = "2026.9.5-beta.4";
+    versionByTag.latest = "2026.9.5";
+    await expect(
+      resolveNpmChannelTag({ channel: "beta", packageName: "@marxbiotech/openclaw", runCommand }),
+    ).resolves.toMatchObject({ version: "2026.9.5", tag: "latest" });
+    expect(runCommandMock.mock.calls.map(([argv]) => argv[2])).toEqual([
+      "@marxbiotech/openclaw@beta",
+      "@marxbiotech/openclaw@latest",
+    ]);
+  });
+
+  it("queries the scoped public registry without an npm command", async () => {
+    mockHttp.intercept({
+      url: "https://registry.npmjs.org/%40marxbiotech%2Fopenclaw/latest",
+      reply: { json: { name: "@marxbiotech/openclaw", version: "2026.9.5" } },
+    });
+    await expect(
+      resolveNpmChannelTag({ channel: "stable", packageName: "@marxbiotech/openclaw" }),
+    ).resolves.toMatchObject({ version: "2026.9.5" });
+    expect(mockHttp.requests().map((request) => request.fullUrl)).toEqual([
+      "https://registry.npmjs.org/%40marxbiotech%2Fopenclaw/latest",
+    ]);
+  });
+
   it.each([50, 1000, 420_000])(
     "forwards %i ms to npm view with global config scope",
     async (timeoutMs) => {

@@ -8,6 +8,7 @@ import {
   validateWorkerAdmissionHandshake,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { isExactSemverVersion } from "../../infra/npm-registry-spec.js";
+import { OPENCLAW_PACKAGE_NAMES } from "../../infra/openclaw-package-identity.js";
 import { normalizeScpRemotePath } from "../../infra/scp-host.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import type { WorkerSshEndpoint, WorkerSshIdentity } from "../../plugins/types.js";
@@ -526,7 +527,7 @@ function normalizeHandshake(artifact: WorkerInstallationArtifact): WorkerAdmissi
   if (artifact.install === "npm") {
     if (
       !isExactSemverVersion(openclawVersion) ||
-      artifact.packageSpec !== `openclaw@${openclawVersion}`
+      !OPENCLAW_PACKAGE_NAMES.some((name) => artifact.packageSpec === `${name}@${openclawVersion}`)
     ) {
       throw new Error(`Worker npm install must use exact package openclaw@${openclawVersion}`);
     }

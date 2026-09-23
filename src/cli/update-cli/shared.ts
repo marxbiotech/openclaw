@@ -6,6 +6,10 @@ import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { hasErrnoCode } from "../../infra/errors.js";
 import { resolveRequiredHomeDir } from "../../infra/home-dir.js";
+import {
+  OPENCLAW_PACKAGE_NAMES,
+  isOpenClawPackageName,
+} from "../../infra/openclaw-package-identity.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { readPackageName, readPackageVersion } from "../../infra/package-json.js";
 import { normalizePackageTagInput } from "../../infra/package-tag.js";
@@ -145,12 +149,11 @@ const UPSTREAM_REPOSITORY_URL = "https://github.com/openclaw/openclaw.git";
 // A shallow clone would make older or non-default dev targets unreachable.
 const GIT_CLONE_BLOB_FILTER = "--filter=blob:none";
 
-export const DEFAULT_PACKAGE_NAME = "openclaw";
-const CORE_PACKAGE_NAMES = new Set([DEFAULT_PACKAGE_NAME]);
+export const DEFAULT_PACKAGE_NAME: string = OPENCLAW_PACKAGE_NAMES[0];
 
 /** Normalize a CLI tag/version/spec into the npm target form accepted by update flows. */
 export function normalizeTag(value?: string | null): string | null {
-  return normalizePackageTagInput(value, ["openclaw", DEFAULT_PACKAGE_NAME]);
+  return normalizePackageTagInput(value, OPENCLAW_PACKAGE_NAMES);
 }
 
 function normalizeVersionTag(tag: string): string | null {
@@ -168,7 +171,13 @@ export { readPackageName, readPackageVersion };
 export async function resolveTargetVersion(
   tag: string,
   timeoutMs?: number,
-  options: { spec?: string; command?: string; cwd?: string; env?: NodeJS.ProcessEnv } = {},
+  options: {
+    spec?: string;
+    packageName?: string;
+    command?: string;
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+  } = {},
 ): Promise<string | null> {
   if (!canResolveRegistryVersionForPackageTarget(tag)) {
     return null;
@@ -181,6 +190,7 @@ export async function resolveTargetVersion(
     tag,
     timeoutMs,
     spec: options.spec,
+    packageName: options.packageName,
     command: options.command,
     cwd: options.cwd,
     env: options.env,
@@ -200,7 +210,7 @@ export async function isGitCheckout(root: string): Promise<boolean> {
 
 async function isCorePackage(root: string): Promise<boolean> {
   const name = await readPackageName(root);
-  return Boolean(name && CORE_PACKAGE_NAMES.has(name));
+  return Boolean(name && isOpenClawPackageName(name));
 }
 
 /** Return true only for existing directories with no entries. */

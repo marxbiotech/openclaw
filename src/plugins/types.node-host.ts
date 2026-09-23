@@ -36,6 +36,12 @@ export type OpenClawPluginNodeHostCommandContext = {
   signal?: AbortSignal;
   /** Prepare local exec policy; call the returned guard synchronously immediately before spawn. */
   prepareExecAuthorization?: (source: "human-approved" | "session-full") => () => void;
+  /**
+   * Require current node-local full/off policy and its approvals floor without a human decision.
+   * Gateway policy must separately authorize the command. Call the guard immediately before
+   * each spawn or retained-worker use; reject this mode when the capability is absent.
+   */
+  prepareConfiguredExecAuthorization?: () => () => void;
   /** Protect one exact node-owned placement workspace for this invocation's lifetime. */
   acquireManagedWorkspace?: (request: OpenClawPluginNodeWorkspace) => {
     workspaceDir: string;

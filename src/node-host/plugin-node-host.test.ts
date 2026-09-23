@@ -289,6 +289,7 @@ describe("plugin node-host registry", () => {
     expect(handle).toHaveBeenCalledWith('{"ok":true}', undefined, {
       ...context,
       prepareExecAuthorization: expect.any(Function),
+      prepareConfiguredExecAuthorization: expect.any(Function),
     });
   });
 

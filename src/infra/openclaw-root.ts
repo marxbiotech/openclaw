@@ -2,9 +2,8 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { getPluginCache } from "../plugins/plugin-cache.js";
+import { isOpenClawPackageName } from "./openclaw-package-identity.js";
 import { openClawRootFs, openClawRootFsSync } from "./openclaw-root.fs.runtime.js";
-
-const CORE_PACKAGE_NAMES = new Set(["openclaw"]);
 
 type PackageRootOptions = { cwd?: string; argv1?: string; moduleUrl?: string };
 
@@ -48,7 +47,7 @@ function readPackageNameSync(dir: string): string | null {
 async function findPackageRoot(startDir: string, maxDepth = 12): Promise<string | null> {
   for (const current of iterAncestorDirs(startDir, maxDepth)) {
     const name = await readPackageName(current);
-    if (name && CORE_PACKAGE_NAMES.has(name)) {
+    if (name && isOpenClawPackageName(name)) {
       return current;
     }
   }
@@ -58,7 +57,7 @@ async function findPackageRoot(startDir: string, maxDepth = 12): Promise<string 
 function findPackageRootSync(startDir: string, maxDepth = 12): string | null {
   for (const current of iterAncestorDirs(startDir, maxDepth)) {
     const name = readPackageNameSync(current);
-    if (name && CORE_PACKAGE_NAMES.has(name)) {
+    if (name && isOpenClawPackageName(name)) {
       return current;
     }
   }
