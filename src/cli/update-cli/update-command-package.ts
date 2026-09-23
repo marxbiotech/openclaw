@@ -447,6 +447,7 @@ export async function runPackageInstallUpdate(
       timeoutMs: params.timeoutMs,
       pkgRoot: params.root,
       honorPackageRoot: params.honorPackageRoot === true,
+      packageName: (await readPackageName(params.root)) ?? DEFAULT_PACKAGE_NAME,
     });
   }
   const pkgRoot = installTarget.packageRoot;

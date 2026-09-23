@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { isContainerEnvironment } from "./container-environment.js";
+import { isOpenClawPackageName } from "./openclaw-package-identity.js";
 import { detectGlobalInstallManagerForRoot } from "./update-global.js";
 import { UPDATE_RUNNER_TIMEOUT_MS } from "./update-run-timeouts.js";
 import { buildUpdateCommandRunner } from "./update-runner-command.js";
@@ -10,9 +11,6 @@ import type {
   UpdateInstallSurface,
   UpdateRunnerOptions,
 } from "./update-runner-types.js";
-
-const DEFAULT_PACKAGE_NAME = "openclaw";
-const CORE_PACKAGE_NAMES = new Set([DEFAULT_PACKAGE_NAME]);
 
 export function resolveUnmanagedUpdateInstallReason() {
   return isContainerEnvironment() ? "container-image-install" : "unmanaged-package-install";
@@ -72,7 +70,7 @@ export async function findPackageRoot(candidates: string[]) {
       try {
         const raw = await fs.readFile(path.join(current, "package.json"), "utf-8");
         const name = (JSON.parse(raw) as { name?: string }).name?.trim();
-        if (name && CORE_PACKAGE_NAMES.has(name)) {
+        if (name && isOpenClawPackageName(name)) {
           return current;
         }
       } catch {

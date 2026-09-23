@@ -15,6 +15,8 @@ import {
   applyPosixNpmScriptShellEnv,
   createNpmFreshnessBypassArgs,
 } from "./npm-install-env.js";
+import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
+import { OPENCLAW_PACKAGE_NAMES, isOpenClawPackageName } from "./openclaw-package-identity.js";
 import {
   collectPackageDistInventory,
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
@@ -66,13 +68,12 @@ export type ResolvedGlobalInstallTarget = ResolvedGlobalInstallCommand & {
 };
 
 const PRIMARY_PACKAGE_NAME = "openclaw";
-const ALL_PACKAGE_NAMES = [PRIMARY_PACKAGE_NAME] as const;
+const ALL_PACKAGE_NAMES = OPENCLAW_PACKAGE_NAMES;
 const GLOBAL_RENAME_PREFIX = ".";
 /** npm-compatible spec used when the user asks to install the moving main branch. */
 const OPENCLAW_MAIN_PACKAGE_SPEC = "github:openclaw/openclaw#main";
 const COREPACK_ENABLE_DOWNLOAD_PROMPT_DEFAULT = "0";
 const NPM_GLOBAL_INSTALL_QUIET_FLAGS = ["--no-fund", "--no-audit", "--loglevel=error"] as const;
-const PNPM_OPENCLAW_BUILD_ALLOWLIST_FLAG = `--allow-build=${PRIMARY_PACKAGE_NAME}`;
 const BUN_OPENCLAW_TRUST_FLAG = "--trust";
 const FIRST_PACKAGED_DIST_INVENTORY_VERSION = { major: 2026, minor: 4, patch: 15 };
 const OMITTED_PRIVATE_QA_BUNDLED_PLUGIN_ROOTS = new Set([
@@ -183,12 +184,14 @@ function resolveNpmInstallScriptsAllowFlag(
 ): string {
   const normalized = normalizePackageTarget(spec);
   const unaliased = stripPrimaryPackageAlias(normalized);
-  let identity =
-    isExplicitPackageInstallSpec(normalized) ||
-    isExplicitPackageInstallSpec(unaliased) ||
-    isRelativePackageInstallPath(unaliased) ||
-    path.isAbsolute(normalized) ||
-    path.isAbsolute(unaliased)
+  const registryName = parseRegistryNpmSpec(normalized)?.name;
+  let identity = isOpenClawPackageName(registryName)
+    ? registryName
+    : isExplicitPackageInstallSpec(normalized) ||
+        isExplicitPackageInstallSpec(unaliased) ||
+        isRelativePackageInstallPath(unaliased) ||
+        path.isAbsolute(normalized) ||
+        path.isAbsolute(unaliased)
       ? unaliased
       : PRIMARY_PACKAGE_NAME;
   const alias = resolveNpmAliasPackageName(identity);
@@ -264,10 +267,10 @@ function resolveNpmAliasPackageName(spec: string): string | null {
 
 function stripPrimaryPackageAlias(spec: string): string {
   const normalized = normalizePackageTarget(spec);
-  const prefix = `${PRIMARY_PACKAGE_NAME}@`;
-  return normalized.toLowerCase().startsWith(prefix)
-    ? normalized.slice(prefix.length).trim()
-    : normalized;
+  const prefix = ALL_PACKAGE_NAMES.map((name) => `${name}@`).find((candidate) =>
+    normalized.toLowerCase().startsWith(candidate),
+  );
+  return prefix ? normalized.slice(prefix.length).trim() : normalized;
 }
 
 /**
@@ -712,11 +715,38 @@ function inferGlobalRootFromPackageRoot(pkgRoot?: string | null): string | null 
   return path.basename(globalRoot) === "node_modules" ? globalRoot : null;
 }
 
-function resolvePackageRootFromGlobalRoot(params: {
+/** The installed dependency key can differ from its registry manifest name. */
+export function resolveInstalledPackageName(
+  pkgRoot: string | null | undefined,
+  packageName: string,
+): string {
+  const globalRoot = inferGlobalRootFromPackageRoot(pkgRoot);
+  if (!globalRoot || !pkgRoot || !isOpenClawPackageName(packageName)) {
+    return packageName;
+  }
+  const installedName = path.relative(globalRoot, pkgRoot).split(path.sep).join("/");
+  return isOpenClawPackageName(installedName) ? installedName : packageName;
+}
+
+export function resolvePackageRootFromGlobalRoot(params: {
   globalRoot: string;
   packageName?: string;
+  installedRoot?: string | null;
 }): string {
   const packageName = params.packageName?.trim() || PRIMARY_PACKAGE_NAME;
+  // npm aliases keep the registry identity in package.json but use the alias directory.
+  if (
+    params.installedRoot &&
+    inferGlobalRootFromPackageRoot(params.installedRoot) === path.resolve(params.globalRoot)
+  ) {
+    const installedName = path
+      .relative(params.globalRoot, params.installedRoot)
+      .split(path.sep)
+      .join("/");
+    if (isOpenClawPackageName(installedName) && isOpenClawPackageName(packageName)) {
+      return path.resolve(params.installedRoot);
+    }
+  }
   const parts = packageName.split("/");
   const hasSafeSegments =
     parts.length > 0 &&
@@ -795,7 +825,7 @@ function inferPnpmIsolatedGlobalRootFromPackageRoot(pkgRoot?: string | null): st
 
 async function hasPnpmIsolatedProjectMetadata(
   pkgRoot?: string | null,
-  packageName = PRIMARY_PACKAGE_NAME,
+  packageName?: string,
 ): Promise<boolean> {
   if (!inferPnpmIsolatedGlobalRootFromPackageRoot(pkgRoot)) {
     return false;
@@ -811,7 +841,10 @@ async function hasPnpmIsolatedProjectMetadata(
     .catch(() => null);
   return Boolean(
     manifest?.dependencies &&
-    packageName in manifest.dependencies &&
+    (packageName ??
+      (pkgRoot
+        ? path.relative(nodeModulesRoot, pkgRoot).split(path.sep).join("/")
+        : PRIMARY_PACKAGE_NAME)) in manifest.dependencies &&
     (await pathExists(path.join(installDir, "pnpm-lock.yaml"))),
   );
 }
@@ -923,7 +956,15 @@ async function isPnpmIsolatedGlobalPackageRoot(pkgRoot?: string | null): Promise
   if (!globalRoot) {
     return false;
   }
-  return Boolean(await resolvePnpmIsolatedGlobalPackage({ globalRoot, pkgRoot }));
+  return Boolean(
+    await resolvePnpmIsolatedGlobalPackage({
+      globalRoot,
+      pkgRoot,
+      packageName: pkgRoot
+        ? path.relative(inferGlobalRootFromPackageRoot(pkgRoot)!, pkgRoot).split(path.sep).join("/")
+        : undefined,
+    }),
+  );
 }
 
 /**
@@ -973,13 +1014,21 @@ export async function resolvePnpmGlobalInstallOwner(
   pkgRoot: string,
 ): Promise<{ ownerRoot: string; packageRoot: string } | null> {
   const globalRoot = inferPnpmGlobalRootFromPackageRoot(pkgRoot);
-  if (!globalRoot || (await readPackageName(pkgRoot)) !== PRIMARY_PACKAGE_NAME) {
+  const packageName = await readPackageName(pkgRoot);
+  if (!globalRoot || !isOpenClawPackageName(packageName)) {
     return null;
   }
   let ownerRoot: string | null;
   let packageRoot: string;
   if (inferPnpmIsolatedGlobalRootFromPackageRoot(pkgRoot)) {
-    const active = await resolvePnpmIsolatedGlobalPackage({ globalRoot, pkgRoot });
+    const active = await resolvePnpmIsolatedGlobalPackage({
+      globalRoot,
+      pkgRoot,
+      packageName: path
+        .relative(inferGlobalRootFromPackageRoot(pkgRoot)!, pkgRoot)
+        .split(path.sep)
+        .join("/"),
+    });
     if (!active) {
       return null;
     }
@@ -990,9 +1039,13 @@ export async function resolvePnpmGlobalInstallOwner(
       return null;
     }
     ownerRoot = await fs.realpath(path.dirname(globalRoot)).catch(() => null);
-    packageRoot = resolvePackageRootFromGlobalRoot({ globalRoot });
+    packageRoot = resolvePackageRootFromGlobalRoot({
+      globalRoot,
+      packageName,
+      installedRoot: pkgRoot,
+    });
   }
-  if (!ownerRoot || (await readPackageName(packageRoot)) !== PRIMARY_PACKAGE_NAME) {
+  if (!ownerRoot || !isOpenClawPackageName(await readPackageName(packageRoot))) {
     return null;
   }
   return { ownerRoot, packageRoot };
@@ -1033,7 +1086,11 @@ function normalizeGlobalInstallCommand(
 
 function resolveBunGlobalInstallSpec(spec: string): string {
   const trimmed = normalizePackageTarget(spec);
-  if (normalizeLowercaseStringOrEmpty(trimmed).startsWith(`${PRIMARY_PACKAGE_NAME}@`)) {
+  if (
+    ALL_PACKAGE_NAMES.some((name) =>
+      normalizeLowercaseStringOrEmpty(trimmed).startsWith(`${name}@`),
+    )
+  ) {
     return trimmed;
   }
   const isWindowsAbsolutePath = /^[a-z]:[\\/]/iu.test(trimmed);
@@ -1103,21 +1160,25 @@ export async function resolveGlobalInstallTarget(params: {
           params.pkgRoot,
         )
       : null;
+  const installedPackageName = resolveInstalledPackageName(
+    params.pkgRoot,
+    params.packageName ?? PRIMARY_PACKAGE_NAME,
+  );
   const inferredPnpmIsolatedGlobalRoot = inferPnpmIsolatedGlobalRootFromPackageRoot(params.pkgRoot);
   const pnpmIsolatedPackage = inferredPnpmIsolatedGlobalRoot
     ? await resolvePnpmIsolatedGlobalPackage({
         globalRoot: inferredPnpmIsolatedGlobalRoot,
-        packageName: params.packageName,
+        packageName: installedPackageName,
         pkgRoot: params.pkgRoot,
       })
     : await resolvePnpmIsolatedGlobalPackage({
         globalRoot: requestedPnpmGlobalRoot,
-        packageName: params.packageName,
+        packageName: installedPackageName,
         pkgRoot: params.pkgRoot,
       });
   const hasPnpmIsolatedMetadata = pnpmIsolatedPackage
     ? true
-    : await hasPnpmIsolatedProjectMetadata(params.pkgRoot, params.packageName);
+    : await hasPnpmIsolatedProjectMetadata(params.pkgRoot, installedPackageName);
   const verifiedPnpmIsolatedGlobalRoot =
     pnpmIsolatedPackage?.globalRoot ??
     (hasPnpmIsolatedMetadata ? inferredPnpmIsolatedGlobalRoot : null);
@@ -1167,7 +1228,8 @@ export async function resolveGlobalInstallTarget(params: {
   const fallbackPackageRoot = targetGlobalRoot
     ? resolvePackageRootFromGlobalRoot({
         globalRoot: targetGlobalRoot,
-        packageName: params.packageName,
+        packageName: installedPackageName,
+        installedRoot: params.pkgRoot,
       })
     : null;
   const packageRoot =
@@ -1354,7 +1416,16 @@ export function globalInstallArgs(
 ): string[] {
   const resolved = normalizeGlobalInstallCommand(managerOrCommand, pkgRoot);
   if (resolved.manager === "pnpm") {
-    return [resolved.command, "add", "-g", PNPM_OPENCLAW_BUILD_ALLOWLIST_FLAG, spec];
+    const registryName =
+      parseRegistryNpmSpec(spec)?.name ??
+      resolveNpmAliasPackageName(stripPrimaryPackageAlias(spec));
+    return [
+      resolved.command,
+      "add",
+      "-g",
+      `--allow-build=${isOpenClawPackageName(registryName) ? registryName : PRIMARY_PACKAGE_NAME}`,
+      spec,
+    ];
   }
   if (resolved.manager === "bun") {
     return [

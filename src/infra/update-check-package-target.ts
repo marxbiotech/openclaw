@@ -74,9 +74,15 @@ function formatNpmViewError(res: { stdout: string; stderr: string }): string {
   return raw ? `npm view failed: ${raw}` : "npm view failed";
 }
 
-function packageTargetSpec(params: { target: string; spec?: string }): string {
+function packageTargetSpec(params: {
+  target: string;
+  spec?: string;
+  packageName?: string;
+}): string {
   const spec = params.spec?.trim();
-  return spec || `openclaw@${params.target.trim() || "latest"}`;
+  return (
+    spec || `${params.packageName ?? PUBLIC_NPM_PACKAGE_NAME}@${params.target.trim() || "latest"}`
+  );
 }
 
 const PUBLIC_NPM_REGISTRY_URL = "https://registry.npmjs.org/";

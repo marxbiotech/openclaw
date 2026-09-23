@@ -459,45 +459,48 @@ describe("bootstrapWorker", () => {
     }
   });
 
-  it("installs only the exact npm package without transferring a tarball", async () => {
-    const artifact: WorkerInstallationArtifact = {
-      install: "npm",
-      bundleHash: BUNDLE_HASH,
-      openclawVersion: VERSION,
-      protocolFeatures: [],
-      packageIntegrity: NPM_INTEGRITY,
-      packageSpec: `openclaw@${VERSION}`,
-    };
-    const npmReceipt = JSON.stringify({
-      bundleHash: BUNDLE_HASH,
-      openclawVersion: VERSION,
-      protocolFeatures: [],
-    });
-    const npmRunner = fakeRunner([
-      result({ stdout: tagged("install", REMOTE_TARBALL) }),
-      result({ stdout: tagged("receipt", npmReceipt) }),
-      result(),
-    ]);
+  it.each(["openclaw", "@marxbiotech/openclaw"])(
+    "installs only the exact %s package without transferring a tarball",
+    async (packageName) => {
+      const artifact: WorkerInstallationArtifact = {
+        install: "npm",
+        bundleHash: BUNDLE_HASH,
+        openclawVersion: VERSION,
+        protocolFeatures: [],
+        packageIntegrity: NPM_INTEGRITY,
+        packageSpec: `${packageName}@${VERSION}`,
+      };
+      const npmReceipt = JSON.stringify({
+        bundleHash: BUNDLE_HASH,
+        openclawVersion: VERSION,
+        protocolFeatures: [],
+      });
+      const npmRunner = fakeRunner([
+        result({ stdout: tagged("install", REMOTE_TARBALL) }),
+        result({ stdout: tagged("receipt", npmReceipt) }),
+        result(),
+      ]);
 
-    await bootstrapWorker(
-      { ssh: SSH, artifact },
-      { resolveIdentity, runCommand: npmRunner.runCommand },
-    );
+      await bootstrapWorker(
+        { ssh: SSH, artifact },
+        { resolveIdentity, runCommand: npmRunner.runCommand },
+      );
 
-    expect(npmRunner.calls.map((call) => call.argv[0])).toEqual(["ssh", "ssh", "ssh"]);
-    expect(npmRunner.calls[1]?.options.input).toContain("npm pack");
-    expect(npmRunner.calls[1]?.options.input).not.toContain("npm install");
-    expect(npmRunner.calls[1]?.options.input).toContain("--registry=https://registry.npmjs.org/");
-    expect(npmRunner.calls[1]?.options.input).toContain("package/dist/worker/worker.mjs");
-    expect(npmRunner.calls[1]?.options.input).toContain(
-      "package/dist/worker/github-exec-launcher.mjs",
-    );
-    expect(npmRunner.calls[1]?.options.input).toContain(
-      "package/dist/worker/workspace-rsync-receiver.mjs",
-    );
-    expect(npmRunner.calls[1]?.options.input).not.toContain("node_modules");
-    expect(npmRunner.calls[1]?.argv.at(-1)).toContain(`openclaw@${VERSION}`);
-  });
+      expect(npmRunner.calls.map((call) => call.argv[0])).toEqual(["ssh", "ssh", "ssh"]);
+      expect(npmRunner.calls[1]?.options.input).toContain("npm pack");
+      expect(npmRunner.calls[1]?.options.input).not.toContain("npm install");
+      expect(npmRunner.calls[1]?.options.input).toContain("--registry=https://registry.npmjs.org/");
+      expect(npmRunner.calls[1]?.options.input).toContain("package/dist/worker/worker.mjs");
+      expect(npmRunner.calls[1]?.options.input).toContain(
+        "package/dist/worker/github-exec-launcher.mjs",
+      );
+      expect(npmRunner.calls[1]?.options.input).toContain(
+        "package/dist/worker/workspace-rsync-receiver.mjs",
+      );
+      expect(npmRunner.calls[1]?.options.input).not.toContain("node_modules");
+      expect(npmRunner.calls[1]?.argv.at(-1)).toContain(`openclaw@${VERSION}`);
+    },
+  );
 
   it("rejects a non-exact npm package before opening SSH", async () => {
     const runner = fakeRunner([]);

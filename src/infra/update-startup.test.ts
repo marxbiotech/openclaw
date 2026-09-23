@@ -153,6 +153,7 @@ const UPDATE_CHECK_STATE_KEY = "update.checkState";
 type PersistedUpdateCheckState = {
   lastCheckedAt?: string;
   lastCheckedChannel?: "stable" | "extended-stable" | "beta" | "dev";
+  lastCheckedPackageName?: string;
   lastNotifiedVersion?: string;
   lastNotifiedTag?: string;
   lastAvailableVersion?: string;
@@ -391,6 +392,17 @@ describe("update-startup", () => {
       installKind: "package",
       packageManager: "npm",
     } satisfies UpdateCheckResult);
+  }
+
+  async function mockForkPackageInstallStatus() {
+    const root = path.join(tempDir, "fork-install");
+    await fs.mkdir(root, { recursive: true });
+    await fs.writeFile(
+      path.join(root, "package.json"),
+      JSON.stringify({ name: "@marxbiotech/openclaw", version: "1.0.0" }),
+    );
+    mockPackageInstallStatus(root);
+    return root;
   }
 
   function mockNpmChannelTag(tag: string, version: string) {
@@ -642,6 +654,86 @@ describe("update-startup", () => {
     expect(message).not.toContain("\u001b");
     expect(message?.split("Note: ")[1]).toHaveLength(500);
     expect(resolveNpmChannelTag).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { channel: "stable" as const, auto: false },
+    { channel: "beta" as const, auto: false },
+    { channel: "stable" as const, auto: true },
+    { channel: "beta" as const, auto: true },
+  ])("uses the installed fork for $channel checks with auto=$auto", async ({ channel, auto }) => {
+    const root = await mockForkPackageInstallStatus();
+    const tag = channel === "stable" ? "latest" : "beta";
+    vi.mocked(resolveNpmChannelTag).mockResolvedValue({ tag, version: "2.0.0" });
+    checkTelemetryUpdateMock.mockResolvedValue({ version: "9.0.0", note: "Upstream release" });
+    if (auto && channel === "stable") {
+      writePersistedUpdateCheckState({
+        lastCheckedPackageName: "@marxbiotech/openclaw",
+        autoFirstSeenVersion: "2.0.0",
+        autoFirstSeenTag: "latest",
+        autoFirstSeenAt: "2026-01-15T10:00:00.000Z",
+      });
+    }
+    const runAutoUpdate = createAutoUpdateSuccessMock();
+
+    await runGatewayUpdateCheck({
+      cfg: { update: { channel, auto: { enabled: auto } } },
+      log: { info: vi.fn() },
+      isNixMode: false,
+      allowInTests: true,
+      activeWorkInspectors: idleActiveWorkInspectors(),
+      runAutoUpdate,
+    });
+
+    expect(checkTelemetryUpdateMock).not.toHaveBeenCalled();
+    expect(resolveNpmChannelTag).toHaveBeenCalledWith({
+      channel,
+      packageName: "@marxbiotech/openclaw",
+    });
+    expect(getUpdateAvailable()).toEqual({
+      currentVersion: "1.0.0",
+      latestVersion: "2.0.0",
+      channel: tag,
+    });
+    expect(readPersistedUpdateCheckState()?.lastCheckedPackageName).toBe("@marxbiotech/openclaw");
+    await vi.advanceTimersByTimeAsync(60_000);
+    if (auto) {
+      expect(runAutoUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({ root, packageTargetVersion: "2.0.0", channel }),
+      );
+    } else {
+      expect(runAutoUpdate).not.toHaveBeenCalled();
+    }
+  });
+
+  it("discards a recent upstream hint when the installed fork registry is unavailable", async () => {
+    await mockForkPackageInstallStatus();
+    writePersistedUpdateCheckState({
+      lastCheckedAt: new Date().toISOString(),
+      lastAvailableVersion: "9.0.0",
+      lastAvailableTag: "latest",
+    });
+    checkTelemetryUpdateMock.mockResolvedValue({ version: "9.0.0" });
+    vi.mocked(resolveNpmChannelTag).mockResolvedValue({
+      tag: "latest",
+      version: null,
+      error: "registry unavailable",
+    });
+    const onUpdateAvailableChange = vi.fn();
+
+    await runStableUpdateCheck({ onUpdateAvailableChange });
+
+    expect(checkTelemetryUpdateMock).not.toHaveBeenCalled();
+    expect(resolveNpmChannelTag).toHaveBeenCalledWith({
+      channel: "stable",
+      packageName: "@marxbiotech/openclaw",
+    });
+    expect(getUpdateAvailable()).toBeNull();
+    expect(getUpdateSchedule()?.target).toBeUndefined();
+    expect(onUpdateAvailableChange.mock.calls.every(([available]) => available === null)).toBe(
+      true,
+    );
+    expect(readPersistedUpdateCheckState()?.lastAvailableVersion).toBeUndefined();
   });
 
   it.each([

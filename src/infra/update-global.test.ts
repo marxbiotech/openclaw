@@ -426,6 +426,18 @@ describe("update global helpers", () => {
       packageOptions: {},
     },
     {
+      name: "keeps a fork npm alias on the original package directory",
+      prefix: "openclaw-update-fork-alias-",
+      packageParts: ["openclaw"],
+      packageOptions: { packageName: "@marxbiotech/openclaw" },
+    },
+    {
+      name: "keeps the scoped fork npm install on its existing owner",
+      prefix: "openclaw-update-fork-scoped-",
+      packageParts: ["@marxbiotech", "openclaw"],
+      packageOptions: { packageName: "@marxbiotech/openclaw" },
+    },
+    {
       name: "keeps scoped npm self-updates on the running package root",
       prefix: "openclaw-update-scoped-probe-",
       packageParts: ["@scope", "cli"],

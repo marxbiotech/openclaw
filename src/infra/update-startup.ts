@@ -30,6 +30,11 @@ import {
 import { gitCommitPrefixesMatch } from "./git-commit.js";
 import { executeGitCommand } from "./git-exec.js";
 import {
+  DEFAULT_OPENCLAW_PACKAGE_NAME,
+  isOpenClawPackageName,
+} from "./openclaw-package-identity.js";
+import { readPackageName } from "./package-json.js";
+import {
   readRestartSentinelSnapshot,
   writeRestartSentinelIfUnchanged,
   type VerifiedGitUpdateReceipt,
@@ -80,6 +85,7 @@ import {
 type UpdateCheckState = {
   lastCheckedAt?: string;
   lastCheckedChannel?: UpdateChannel;
+  lastCheckedPackageName?: string;
   lastNotifiedVersion?: string;
   lastNotifiedTag?: string;
   lastAvailableVersion?: string;
@@ -809,18 +815,41 @@ async function runGatewayUpdateCheckOwned(
   if (!shouldRunAutoUpdate) {
     updateCampaign.clear();
   }
-  const telemetryUpdate = await checkTelemetryUpdate(params.getConfig, { surface: "gateway" });
+  const installedPackageName = installStatus.root
+    ? await readPackageName(installStatus.root)
+    : null;
+  const packageName = isOpenClawPackageName(installedPackageName)
+    ? installedPackageName
+    : DEFAULT_OPENCLAW_PACKAGE_NAME;
+  const isForkPackage = packageName !== DEFAULT_OPENCLAW_PACKAGE_NAME;
+  // Upstream telemetry describes its own releases, never a fork's npm channel.
+  const telemetryUpdate = isForkPackage
+    ? null
+    : await checkTelemetryUpdate(params.getConfig, { surface: "gateway" });
   params.signal?.throwIfAborted();
   const state = readState();
   const rawNow = Date.now();
   const now = resolveUpdateCheckNowMs(rawNow);
   const rawNowIsValid = asDateTimestampMs(rawNow) !== undefined;
   const lastCheckedAt = state.lastCheckedAt ? Date.parse(state.lastCheckedAt) : null;
-  const persistedAvailable = isDevGit
-    ? null
-    : resolvePersistedUpdateAvailable(state, configuredChannel);
-  const cacheMatchesChannel = state.lastCheckedChannel === configuredChannel;
+  const cacheMatchesPackage =
+    (state.lastCheckedPackageName ?? DEFAULT_OPENCLAW_PACKAGE_NAME) === packageName;
+  const persistedAvailable =
+    isDevGit || !cacheMatchesPackage
+      ? null
+      : resolvePersistedUpdateAvailable(state, configuredChannel);
+  const cacheMatchesChannel = cacheMatchesPackage && state.lastCheckedChannel === configuredChannel;
   const shouldBypassSharedThrottle = isDevGit || !cacheMatchesChannel;
+  if (!cacheMatchesPackage) {
+    clearAutoState(state);
+    delete state.lastNotifiedVersion;
+    delete state.lastNotifiedTag;
+    updateCampaign.clear();
+    setUpdateScheduleCache({
+      next: withoutTarget(getUpdateSchedule() ?? initialSchedule),
+      onUpdateScheduleChange: params.onUpdateScheduleChange,
+    });
+  }
   setUpdateAvailableCache({
     next: persistedAvailable,
     onUpdateAvailableChange: params.onUpdateAvailableChange,
@@ -864,6 +893,7 @@ async function runGatewayUpdateCheckOwned(
     ...state,
     lastCheckedAt: resolveUpdateCheckTimestamp(now),
     lastCheckedChannel: configuredChannel,
+    lastCheckedPackageName: packageName,
   };
   if (!cacheMatchesChannel) {
     clearAvailabilityState(nextState);
@@ -1000,8 +1030,8 @@ async function runGatewayUpdateCheckOwned(
 
   const channel = configuredChannel;
   const resolved =
-    shouldRunAutoUpdate || channel !== "stable"
-      ? await resolveNpmChannelTag({ channel })
+    isForkPackage || shouldRunAutoUpdate || channel !== "stable"
+      ? await resolveNpmChannelTag({ channel, ...(isForkPackage ? { packageName } : {}) })
       : {
           tag: "latest",
           version: telemetryUpdate?.version ?? null,
