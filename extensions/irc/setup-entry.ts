@@ -1,5 +1,14 @@
-import { ircPlugin } from "./src/channel.js";
+// Irc plugin module implements setup entry behavior.
+import { defineBundledChannelSetupEntry } from "openclaw/plugin-sdk/channel-entry-contract";
 
-export default {
-  plugin: ircPlugin,
-};
+export default defineBundledChannelSetupEntry({
+  importMetaUrl: import.meta.url,
+  plugin: {
+    specifier: "./channel-plugin-api.js",
+    exportName: "ircPlugin",
+  },
+  secrets: {
+    specifier: "./secret-contract-api.js",
+    exportName: "channelSecrets",
+  },
+});

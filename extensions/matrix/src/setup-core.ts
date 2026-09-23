@@ -1,111 +1,142 @@
+import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
+// Matrix plugin module implements setup core behavior.
 import {
-  applyAccountNameToChannelSection,
-  migrateBaseNameToDefaultAccount,
-} from "../../../src/channels/plugins/setup-helpers.js";
-import type { ChannelSetupAdapter } from "../../../src/channels/plugins/types.adapters.js";
-import { normalizeSecretInputString } from "../../../src/config/types.secrets.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../src/routing/session-key.js";
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+  prepareScopedSetupConfig,
+  setSetupChannelEnabled,
+  type ChannelSetupAdapter,
+  type ChannelSetupWizardAdapter,
+} from "openclaw/plugin-sdk/setup";
+import { applyMatrixSetupAccountConfig, validateMatrixSetupInput } from "./setup-config.js";
+import {
+  namedAccountPromotionKeys,
+  resolveSingleAccountPromotionTarget,
+  singleAccountKeysToMove,
+} from "./setup-contract.js";
+import { createMatrixSetupDmPolicy } from "./setup-dm-policy.js";
 import type { CoreConfig } from "./types.js";
 
 const channel = "matrix" as const;
+type MatrixSetupWizardModule = { matrixSetupWizard: ChannelSetupWizardAdapter };
 
-export function buildMatrixConfigUpdate(
-  cfg: CoreConfig,
-  input: {
-    homeserver?: string;
-    userId?: string;
-    accessToken?: string;
-    password?: string;
-    deviceName?: string;
-    initialSyncLimit?: number;
-  },
-): CoreConfig {
-  const existing = cfg.channels?.matrix ?? {};
+function resolveMatrixSetupAccountId(params: { accountId?: string; name?: string }): string {
+  return normalizeAccountId(params.accountId?.trim() || params.name?.trim() || DEFAULT_ACCOUNT_ID);
+}
+
+export function createMatrixSetupWizardProxy(
+  loadWizardModule: () => Promise<MatrixSetupWizardModule>,
+): ChannelSetupWizardAdapter {
+  let wizardPromise: Promise<ChannelSetupWizardAdapter> | null = null;
+  const loadWizard = () => {
+    wizardPromise ??= loadWizardModule().then((module) => module.matrixSetupWizard);
+    return wizardPromise;
+  };
   return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      matrix: {
-        ...existing,
-        enabled: true,
-        ...(input.homeserver ? { homeserver: input.homeserver } : {}),
-        ...(input.userId ? { userId: input.userId } : {}),
-        ...(input.accessToken ? { accessToken: input.accessToken } : {}),
-        ...(input.password ? { password: input.password } : {}),
-        ...(input.deviceName ? { deviceName: input.deviceName } : {}),
-        ...(typeof input.initialSyncLimit === "number"
-          ? { initialSyncLimit: input.initialSyncLimit }
-          : {}),
-      },
+    channel,
+    getStatus: async (ctx) => await (await loadWizard()).getStatus(ctx),
+    configure: async (ctx) => await (await loadWizard()).configure(ctx),
+    configureInteractive: async (ctx) => {
+      const wizard = await loadWizard();
+      return await (wizard.configureInteractive ?? wizard.configure)(ctx);
     },
+    configureWhenConfigured: async (ctx) => {
+      const wizard = await loadWizard();
+      return await (
+        wizard.configureWhenConfigured ??
+        wizard.configureInteractive ??
+        wizard.configure
+      )(ctx);
+    },
+    afterConfigWritten: async (ctx) => await (await loadWizard()).afterConfigWritten?.(ctx),
+    dmPolicy: createMatrixSetupDmPolicy(async (params) => {
+      const promptAllowFrom = (await loadWizard()).dmPolicy?.promptAllowFrom;
+      return promptAllowFrom ? await promptAllowFrom(params) : params.cfg;
+    }),
+    disable: (cfg) => setSetupChannelEnabled(cfg, channel, false),
   };
 }
 
 export const matrixSetupAdapter: ChannelSetupAdapter = {
-  resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
+  singleAccountKeysToMove,
+  namedAccountPromotionKeys,
+  resolveSingleAccountPromotionTarget,
+  resolveAccountId: ({ accountId, input }) =>
+    resolveMatrixSetupAccountId({
+      accountId,
+      name: input?.name,
+    }),
+  resolveBindingAccountId: ({ accountId, agentId }) =>
+    resolveMatrixSetupAccountId({
+      accountId,
+      name: agentId,
+    }),
   applyAccountName: ({ cfg, accountId, name }) =>
-    applyAccountNameToChannelSection({
+    prepareScopedSetupConfig({
       cfg: cfg as CoreConfig,
       channelKey: channel,
       accountId,
       name,
-    }),
-  validateInput: ({ input }) => {
-    if (input.useEnv) {
-      return null;
-    }
-    if (!input.homeserver?.trim()) {
-      return "Matrix requires --homeserver";
-    }
-    const accessToken = input.accessToken?.trim();
-    const password = normalizeSecretInputString(input.password);
-    const userId = input.userId?.trim();
-    if (!accessToken && !password) {
-      return "Matrix requires --access-token or --password";
-    }
-    if (!accessToken) {
-      if (!userId) {
-        return "Matrix requires --user-id when using --password";
-      }
-      if (!password) {
-        return "Matrix requires --password when using --user-id";
-      }
-    }
-    return null;
-  },
-  applyAccountConfig: ({ cfg, accountId, input }) => {
-    const namedConfig = applyAccountNameToChannelSection({
+    }) as CoreConfig,
+  validateInput: ({ accountId, input }) => validateMatrixSetupInput({ accountId, input }),
+  applyAccountConfig: ({ cfg, accountId, input }) =>
+    applyMatrixSetupAccountConfig({
       cfg: cfg as CoreConfig,
-      channelKey: channel,
       accountId,
-      name: input.name,
-    });
-    const next =
-      accountId !== DEFAULT_ACCOUNT_ID
-        ? migrateBaseNameToDefaultAccount({
-            cfg: namedConfig,
-            channelKey: channel,
-          })
-        : namedConfig;
-    if (input.useEnv) {
-      return {
-        ...next,
-        channels: {
-          ...next.channels,
-          matrix: {
-            ...next.channels?.matrix,
-            enabled: true,
-          },
-        },
-      } as CoreConfig;
-    }
-    return buildMatrixConfigUpdate(next as CoreConfig, {
-      homeserver: input.homeserver?.trim(),
-      userId: input.userId?.trim(),
-      accessToken: input.accessToken?.trim(),
-      password: normalizeSecretInputString(input.password),
-      deviceName: input.deviceName?.trim(),
-      initialSyncLimit: input.initialSyncLimit,
+      input,
+    }),
+  afterAccountConfigWritten: async ({ previousCfg, cfg, accountId, runtime }) => {
+    const { runMatrixSetupBootstrapAfterConfigWrite } = await import("./setup-bootstrap.js");
+    await runMatrixSetupBootstrapAfterConfigWrite({
+      previousCfg: previousCfg as CoreConfig,
+      cfg: cfg as CoreConfig,
+      accountId,
+      runtime,
     });
   },
 };
+
+export const matrixSetupContract = defineChannelSetupContract({
+  fields: {
+    homeserver: {
+      kind: "string",
+      cli: { flags: "--homeserver <url>", description: "Matrix homeserver URL" },
+    },
+    userId: { kind: "string", cli: { flags: "--user-id <id>", description: "Matrix user id" } },
+    accessToken: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--access-token <token>", description: "Matrix access token" },
+    },
+    password: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--password <password>", description: "Matrix password" },
+    },
+    deviceName: {
+      kind: "string",
+      cli: { flags: "--device-name <name>", description: "Matrix device name" },
+    },
+    avatarUrl: {
+      kind: "string",
+      cli: { flags: "--avatar-url <url>", description: "Matrix avatar URL" },
+    },
+    initialSyncLimit: {
+      kind: "integer",
+      cli: { flags: "--initial-sync-limit <n>", description: "Matrix initial sync room limit" },
+    },
+    proxy: { kind: "string", cli: { flags: "--proxy <url>", description: "Matrix proxy URL" } },
+    dangerouslyAllowPrivateNetwork: {
+      kind: "boolean",
+      cli: {
+        flags: "--dangerously-allow-private-network",
+        description: "Allow private-network Matrix homeservers",
+      },
+    },
+    useEnv: {
+      kind: "boolean",
+      cli: { flags: "--use-env", description: "Use Matrix environment credentials" },
+    },
+  },
+  legacyAdapter: matrixSetupAdapter,
+});

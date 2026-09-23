@@ -1,42 +1,47 @@
+import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
+// Zalouser plugin module implements setup core behavior.
 import {
-  applyAccountNameToChannelSection,
-  applySetupAccountConfigPatch,
-  migrateBaseNameToDefaultAccount,
-} from "../../../src/channels/plugins/setup-helpers.js";
-import type { ChannelSetupAdapter } from "../../../src/channels/plugins/types.adapters.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../src/routing/session-key.js";
+  createDelegatedSetupWizardProxy,
+  createPatchedAccountSetupAdapter,
+  createSetupTranslator,
+  type ChannelSetupAdapter,
+  type ChannelSetupWizard,
+} from "openclaw/plugin-sdk/setup-runtime";
+
+const t = createSetupTranslator();
 
 const channel = "zalouser" as const;
 
 export const zalouserSetupAdapter: ChannelSetupAdapter = {
-  resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
-  applyAccountName: ({ cfg, accountId, name }) =>
-    applyAccountNameToChannelSection({
-      cfg,
-      channelKey: channel,
-      accountId,
-      name,
-    }),
-  validateInput: () => null,
-  applyAccountConfig: ({ cfg, accountId, input }) => {
-    const namedConfig = applyAccountNameToChannelSection({
-      cfg,
-      channelKey: channel,
-      accountId,
-      name: input.name,
-    });
-    const next =
-      accountId !== DEFAULT_ACCOUNT_ID
-        ? migrateBaseNameToDefaultAccount({
-            cfg: namedConfig,
-            channelKey: channel,
-          })
-        : namedConfig;
-    return applySetupAccountConfigPatch({
-      cfg: next,
-      channelKey: channel,
-      accountId,
-      patch: {},
-    });
-  },
+  ...createPatchedAccountSetupAdapter({
+    channelKey: channel,
+    validateInput: () => null,
+    buildPatch: () => ({}),
+  }),
+  singleAccountKeysToMove: [],
 };
+
+export const zalouserSetupContract = defineChannelSetupContract({
+  fields: {},
+  legacyAdapter: zalouserSetupAdapter,
+});
+
+export function createZalouserSetupWizardProxy(
+  loadWizard: () => Promise<ChannelSetupWizard>,
+): ChannelSetupWizard {
+  return createDelegatedSetupWizardProxy({
+    channel,
+    loadWizard,
+    status: {
+      configuredLabel: t("wizard.channels.statusLoggedIn"),
+      unconfiguredLabel: t("wizard.channels.statusNeedsQrLogin"),
+      configuredHint: t("wizard.channels.statusRecommendedLoggedIn"),
+      unconfiguredHint: t("wizard.channels.statusRecommendedQrLogin"),
+      configuredScore: 1,
+      unconfiguredScore: 15,
+    },
+    credentials: [],
+    delegatePrepare: true,
+    delegateFinalize: true,
+  });
+}

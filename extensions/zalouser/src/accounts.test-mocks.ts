@@ -1,10 +1,12 @@
+// Zalouser plugin module implements accounts mocks behavior.
 import { vi } from "vitest";
 import { createDefaultResolvedZalouserAccount } from "./test-helpers.js";
 
-vi.mock("./accounts.js", async (importOriginal) => {
-  const actual = (await importOriginal()) as Record<string, unknown>;
+vi.mock("./accounts.js", () => {
   return {
-    ...actual,
+    listZalouserAccountIds: () => ["default"],
+    resolveDefaultZalouserAccountId: () => "default",
     resolveZalouserAccountSync: () => createDefaultResolvedZalouserAccount(),
+    checkZcaAuthenticated: async () => false,
   };
 });

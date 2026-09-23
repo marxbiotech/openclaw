@@ -1,22 +1,27 @@
+// Shared ACP command helpers for session identity and reply formatting.
 import { randomUUID } from "node:crypto";
-import { toAcpRuntimeErrorText } from "../../../acp/runtime/error-text.js";
-import type { AcpRuntimeError } from "../../../acp/runtime/errors.js";
-import type { AcpRuntimeSessionMode } from "../../../acp/runtime/types.js";
-import { DISCORD_THREAD_BINDING_CHANNEL } from "../../../channels/thread-bindings-policy.js";
+import type { AcpRuntimeSessionMode } from "@openclaw/acp-core/runtime/types";
+import type { Result } from "@openclaw/normalization-core/result";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { type AcpRuntimeError, toAcpRuntimeErrorText } from "../../../acp/runtime/errors.js";
+import { supportsAutomaticThreadBindingSpawn } from "../../../channels/thread-bindings-policy.js";
 import type { AcpSessionRuntimeOptions } from "../../../config/sessions/types.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
+import { commandReply } from "../command-gates.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
 import { resolveAcpCommandChannel, resolveAcpCommandThreadId } from "./context.js";
-export { resolveAcpInstallCommandHint, resolveConfiguredAcpBackendId } from "./install-hints.js";
 
 export const COMMAND = "/acp";
-export const ACP_SPAWN_USAGE =
-  "Usage: /acp spawn [harness-id] [--mode persistent|oneshot] [--thread auto|here|off] [--cwd <path>] [--label <label>].";
-export const ACP_STEER_USAGE =
+const ACP_SPAWN_USAGE =
+  "Usage: /acp spawn [harness-id] [--mode persistent|oneshot] [--thread auto|here|off] [--bind here|off] [--cwd <path>] [--label <label>].";
+const ACP_STEER_USAGE =
   "Usage: /acp steer [--session <session-key|session-id|session-label>] <instruction>";
 export const ACP_SET_MODE_USAGE =
   "Usage: /acp set-mode <mode> [session-key|session-id|session-label]";
-export const ACP_SET_USAGE = "Usage: /acp set <key> <value> [session-key|session-id|session-label]";
+const ACP_SET_USAGE = "Usage: /acp set <key> <value> [session-key|session-id|session-label]";
 export const ACP_CWD_USAGE = "Usage: /acp cwd <path> [session-key|session-id|session-label]";
 export const ACP_PERMISSIONS_USAGE =
   "Usage: /acp permissions <profile> [session-key|session-id|session-label]";
@@ -31,8 +36,6 @@ export const ACP_INSTALL_USAGE = "Usage: /acp install";
 export const ACP_DOCTOR_USAGE = "Usage: /acp doctor";
 export const ACP_SESSIONS_USAGE = "Usage: /acp sessions";
 export const ACP_STEER_OUTPUT_LIMIT = 800;
-export { SESSION_ID_RE } from "../../../sessions/session-id.js";
-
 export type AcpAction =
   | "spawn"
   | "cancel"
@@ -51,27 +54,29 @@ export type AcpAction =
   | "install"
   | "help";
 
-export type AcpSpawnThreadMode = "auto" | "here" | "off";
+type AcpSpawnThreadMode = "auto" | "here" | "off";
+type AcpSpawnBindMode = "here" | "off";
 
-export type ParsedSpawnInput = {
+type ParsedSpawnInput = {
   agentId: string;
   mode: AcpRuntimeSessionMode;
   thread: AcpSpawnThreadMode;
+  bind: AcpSpawnBindMode;
   cwd?: string;
   label?: string;
 };
 
-export type ParsedSteerInput = {
+type ParsedSteerInput = {
   sessionToken?: string;
   instruction: string;
 };
 
-export type ParsedSingleValueCommandInput = {
+type ParsedSingleValueCommandInput = {
   value: string;
   sessionToken?: string;
 };
 
-export type ParsedSetCommandInput = {
+type ParsedSetCommandInput = {
   key: string;
   value: string;
   sessionToken?: string;
@@ -80,15 +85,8 @@ export type ParsedSetCommandInput = {
 const ACP_UNICODE_DASH_PREFIX_RE =
   /^[\u2010\u2011\u2012\u2013\u2014\u2015\u2212\uFE58\uFE63\uFF0D]+/;
 
-export function stopWithText(text: string): CommandHandlerResult {
-  return {
-    shouldContinue: false,
-    reply: { text },
-  };
-}
-
 export function resolveAcpAction(tokens: string[]): AcpAction {
-  const action = tokens[0]?.trim().toLowerCase();
+  const action = normalizeOptionalLowercaseString(tokens[0]);
   if (
     action === "spawn" ||
     action === "cancel" ||
@@ -122,37 +120,27 @@ function readOptionValue(params: { tokens: string[]; index: number; flag: string
     }
   | { matched: false } {
   const token = normalizeAcpOptionToken(params.tokens[params.index] ?? "");
+  let value: string;
+  let nextIndex = params.index + 1;
   if (token === params.flag) {
     const nextValue = normalizeAcpOptionToken(params.tokens[params.index + 1] ?? "");
-    if (!nextValue || nextValue.startsWith("--")) {
-      return {
-        matched: true,
-        nextIndex: params.index + 1,
-        error: `${params.flag} requires a value`,
-      };
+    value = nextValue.startsWith("--") ? "" : nextValue;
+    if (value) {
+      nextIndex += 1;
     }
+  } else if (token.startsWith(`${params.flag}=`)) {
+    value = token.slice(`${params.flag}=`.length).trim();
+  } else {
+    return { matched: false };
+  }
+  if (!value) {
     return {
       matched: true,
-      value: nextValue,
-      nextIndex: params.index + 2,
+      nextIndex,
+      error: `${params.flag} requires a value`,
     };
   }
-  if (token.startsWith(`${params.flag}=`)) {
-    const value = token.slice(`${params.flag}=`.length).trim();
-    if (!value) {
-      return {
-        matched: true,
-        nextIndex: params.index + 1,
-        error: `${params.flag} requires a value`,
-      };
-    }
-    return {
-      matched: true,
-      value,
-      nextIndex: params.index + 1,
-    };
-  }
-  return { matched: false };
+  return { matched: true, value, nextIndex };
 }
 
 function normalizeAcpOptionToken(raw: string): string {
@@ -168,7 +156,8 @@ function normalizeAcpOptionToken(raw: string): string {
 }
 
 function resolveDefaultSpawnThreadMode(params: HandleCommandsParams): AcpSpawnThreadMode {
-  if (resolveAcpCommandChannel(params) !== DISCORD_THREAD_BINDING_CHANNEL) {
+  const channel = resolveAcpCommandChannel(params);
+  if (!supportsAutomaticThreadBindingSpawn(channel)) {
     return "off";
   }
   const currentThreadId = resolveAcpCommandThreadId(params);
@@ -178,15 +167,17 @@ function resolveDefaultSpawnThreadMode(params: HandleCommandsParams): AcpSpawnTh
 export function parseSpawnInput(
   params: HandleCommandsParams,
   tokens: string[],
-): { ok: true; value: ParsedSpawnInput } | { ok: false; error: string } {
+): Result<ParsedSpawnInput, string> {
   const normalizedTokens = tokens.map((token) => normalizeAcpOptionToken(token));
   let mode: AcpRuntimeSessionMode = "persistent";
   let thread = resolveDefaultSpawnThreadMode(params);
+  let sawThreadOption = false;
+  let bind: AcpSpawnBindMode = "off";
   let cwd: string | undefined;
   let label: string | undefined;
   let rawAgentId: string | undefined;
 
-  for (let i = 0; i < normalizedTokens.length; ) {
+  for (let i = 0; i < normalizedTokens.length;) {
     const token = normalizedTokens[i] ?? "";
 
     const modeOption = readOptionValue({ tokens: normalizedTokens, index: i, flag: "--mode" });
@@ -194,7 +185,7 @@ export function parseSpawnInput(
       if (modeOption.error) {
         return { ok: false, error: `${modeOption.error}. ${ACP_SPAWN_USAGE}` };
       }
-      const raw = modeOption.value?.trim().toLowerCase();
+      const raw = normalizeOptionalLowercaseString(modeOption.value);
       if (raw !== "persistent" && raw !== "oneshot") {
         return {
           ok: false,
@@ -203,6 +194,23 @@ export function parseSpawnInput(
       }
       mode = raw;
       i = modeOption.nextIndex;
+      continue;
+    }
+
+    const bindOption = readOptionValue({ tokens: normalizedTokens, index: i, flag: "--bind" });
+    if (bindOption.matched) {
+      if (bindOption.error) {
+        return { ok: false, error: `${bindOption.error}. ${ACP_SPAWN_USAGE}` };
+      }
+      const raw = normalizeOptionalLowercaseString(bindOption.value);
+      if (raw !== "here" && raw !== "off") {
+        return {
+          ok: false,
+          error: `Invalid --bind value "${bindOption.value}". Use here or off.`,
+        };
+      }
+      bind = raw;
+      i = bindOption.nextIndex;
       continue;
     }
 
@@ -215,7 +223,7 @@ export function parseSpawnInput(
       if (threadOption.error) {
         return { ok: false, error: `${threadOption.error}. ${ACP_SPAWN_USAGE}` };
       }
-      const raw = threadOption.value?.trim().toLowerCase();
+      const raw = normalizeOptionalLowercaseString(threadOption.value);
       if (raw !== "auto" && raw !== "here" && raw !== "off") {
         return {
           ok: false,
@@ -223,6 +231,7 @@ export function parseSpawnInput(
         };
       }
       thread = raw;
+      sawThreadOption = true;
       i = threadOption.nextIndex;
       continue;
     }
@@ -232,7 +241,7 @@ export function parseSpawnInput(
       if (cwdOption.error) {
         return { ok: false, error: `${cwdOption.error}. ${ACP_SPAWN_USAGE}` };
       }
-      cwd = cwdOption.value?.trim();
+      cwd = normalizeOptionalString(cwdOption.value);
       i = cwdOption.nextIndex;
       continue;
     }
@@ -242,7 +251,7 @@ export function parseSpawnInput(
       if (labelOption.error) {
         return { ok: false, error: `${labelOption.error}. ${ACP_SPAWN_USAGE}` };
       }
-      label = labelOption.value?.trim();
+      label = normalizeOptionalString(labelOption.value);
       i = labelOption.nextIndex;
       continue;
     }
@@ -255,7 +264,7 @@ export function parseSpawnInput(
     }
 
     if (!rawAgentId) {
-      rawAgentId = token.trim();
+      rawAgentId = normalizeOptionalString(token);
       i += 1;
       continue;
     }
@@ -266,8 +275,8 @@ export function parseSpawnInput(
     };
   }
 
-  const fallbackAgent = params.cfg.acp?.defaultAgent?.trim() || "";
-  const selectedAgent = (rawAgentId?.trim() || fallbackAgent).trim();
+  const fallbackAgent = normalizeOptionalString(params.cfg.acp?.defaultAgent) ?? "";
+  const selectedAgent = normalizeOptionalString(rawAgentId) ?? fallbackAgent;
   if (!selectedAgent) {
     return {
       ok: false,
@@ -275,6 +284,15 @@ export function parseSpawnInput(
     };
   }
   const normalizedAgentId = normalizeAgentId(selectedAgent);
+  if (bind !== "off" && !sawThreadOption) {
+    thread = "off";
+  }
+  if (thread !== "off" && bind !== "off") {
+    return {
+      ok: false,
+      error: `Use either --thread or --bind for /acp spawn, not both. ${ACP_SPAWN_USAGE}`,
+    };
+  }
 
   return {
     ok: true,
@@ -282,20 +300,19 @@ export function parseSpawnInput(
       agentId: normalizedAgentId,
       mode,
       thread,
+      bind,
       cwd,
-      label: label || undefined,
+      label,
     },
   };
 }
 
-export function parseSteerInput(
-  tokens: string[],
-): { ok: true; value: ParsedSteerInput } | { ok: false; error: string } {
+export function parseSteerInput(tokens: string[]): Result<ParsedSteerInput, string> {
   const normalizedTokens = tokens.map((token) => normalizeAcpOptionToken(token));
   let sessionToken: string | undefined;
   const instructionTokens: string[] = [];
 
-  for (let i = 0; i < normalizedTokens.length; ) {
+  for (let i = 0; i < normalizedTokens.length;) {
     const sessionOption = readOptionValue({
       tokens: normalizedTokens,
       index: i,
@@ -308,7 +325,7 @@ export function parseSteerInput(
           error: `${sessionOption.error}. ${ACP_STEER_USAGE}`,
         };
       }
-      sessionToken = sessionOption.value?.trim() || undefined;
+      sessionToken = normalizeOptionalString(sessionOption.value);
       i = sessionOption.nextIndex;
       continue;
     }
@@ -337,15 +354,15 @@ export function parseSteerInput(
 export function parseSingleValueCommandInput(
   tokens: string[],
   usage: string,
-): { ok: true; value: ParsedSingleValueCommandInput } | { ok: false; error: string } {
-  const value = tokens[0]?.trim() || "";
+): Result<ParsedSingleValueCommandInput, string> {
+  const value = normalizeOptionalString(tokens[0]) ?? "";
   if (!value) {
     return { ok: false, error: usage };
   }
   if (tokens.length > 2) {
     return { ok: false, error: usage };
   }
-  const sessionToken = tokens[1]?.trim() || undefined;
+  const sessionToken = normalizeOptionalString(tokens[1]);
   return {
     ok: true,
     value: {
@@ -355,11 +372,9 @@ export function parseSingleValueCommandInput(
   };
 }
 
-export function parseSetCommandInput(
-  tokens: string[],
-): { ok: true; value: ParsedSetCommandInput } | { ok: false; error: string } {
-  const key = tokens[0]?.trim() || "";
-  const value = tokens[1]?.trim() || "";
+export function parseSetCommandInput(tokens: string[]): Result<ParsedSetCommandInput, string> {
+  const key = normalizeOptionalString(tokens[0]) ?? "";
+  const value = normalizeOptionalString(tokens[1]) ?? "";
   if (!key || !value) {
     return {
       ok: false,
@@ -372,7 +387,7 @@ export function parseSetCommandInput(
       error: ACP_SET_USAGE,
     };
   }
-  const sessionToken = tokens[2]?.trim() || undefined;
+  const sessionToken = normalizeOptionalString(tokens[2]);
   return {
     ok: true,
     value: {
@@ -390,7 +405,7 @@ export function parseOptionalSingleTarget(
   if (tokens.length > 1) {
     return { ok: false, error: usage };
   }
-  const token = tokens[0]?.trim() || "";
+  const token = normalizeOptionalString(tokens[0]) ?? "";
   return {
     ok: true,
     ...(token ? { sessionToken: token } : {}),
@@ -401,7 +416,7 @@ export function resolveAcpHelpText(): string {
   return [
     "ACP commands:",
     "-----",
-    "/acp spawn [harness-id] [--mode persistent|oneshot] [--thread auto|here|off] [--cwd <path>] [--label <label>]",
+    "/acp spawn [harness-id] [--mode persistent|oneshot] [--thread auto|here|off] [--bind here|off] [--cwd <path>] [--label <label>]",
     "/acp cancel [session-key|session-id|session-label]",
     "/acp steer [--session <session-key|session-id|session-label>] <instruction>",
     "/acp close [session-key|session-id|session-label]",
@@ -419,7 +434,8 @@ export function resolveAcpHelpText(): string {
     "",
     "Notes:",
     "- /acp spawn harness-id is an ACP runtime harness alias (for example codex), not an OpenClaw agents.list id.",
-    "- /focus and /unfocus also work with ACP session keys.",
+    "- Use --bind here to pin the current conversation to the ACP session without creating a child thread.",
+    "- /session unbind detaches this conversation without closing its ACP session.",
     "- ACP dispatch of normal thread messages is controlled by acp.dispatch.enabled.",
   ].join("\n");
 }
@@ -434,6 +450,7 @@ export function formatRuntimeOptionsText(options: AcpSessionRuntimeOptions): str
   const parts = [
     options.runtimeMode ? `runtimeMode=${options.runtimeMode}` : null,
     options.model ? `model=${options.model}` : null,
+    options.thinking ? `thinking=${options.thinking}` : null,
     options.cwd ? `cwd=${options.cwd}` : null,
     options.permissionProfile ? `permissionProfile=${options.permissionProfile}` : null,
     typeof options.timeoutSeconds === "number" ? `timeoutSeconds=${options.timeoutSeconds}` : null,
@@ -458,8 +475,11 @@ export function resolveCommandRequestId(params: HandleCommandsParams): string {
     params.ctx.MessageSid ??
     params.ctx.MessageSidFirst ??
     params.ctx.MessageSidLast;
-  if (typeof value === "string" && value.trim()) {
-    return value.trim();
+  if (typeof value === "string") {
+    const normalizedValue = normalizeOptionalString(value);
+    if (normalizedValue) {
+      return normalizedValue;
+    }
   }
   if (typeof value === "number" || typeof value === "bigint") {
     return String(value);
@@ -489,7 +509,7 @@ export async function withAcpCommandErrorBoundary<T>(params: {
     const result = await params.run();
     return params.onSuccess(result);
   } catch (error) {
-    return stopWithText(
+    return commandReply(
       collectAcpErrorText({
         error,
         fallbackCode: params.fallbackCode,

@@ -1,32 +1,20 @@
+// Covers system-message marking and prefix idempotence.
 import { describe, expect, it } from "vitest";
 import { SYSTEM_MARK, hasSystemMark, prefixSystemMessage } from "./system-message.js";
 
 describe("system-message", () => {
   it.each([
-    { input: "thread notice", expected: `${SYSTEM_MARK} thread notice` },
-    { input: `  thread notice  `, expected: `${SYSTEM_MARK} thread notice` },
-    { input: "   ", expected: "" },
-  ])("prefixes %j", ({ input, expected }) => {
-    expect(prefixSystemMessage(input)).toBe(expected);
-  });
-
-  it.each([
-    { input: `${SYSTEM_MARK} already prefixed`, expected: true },
-    { input: `  ${SYSTEM_MARK} hello`, expected: true },
-    { input: SYSTEM_MARK, expected: true },
-    { input: "", expected: false },
-    { input: "hello", expected: false },
-  ])("detects marks for %j", ({ input, expected }) => {
-    expect(hasSystemMark(input)).toBe(expected);
-  });
-
-  it("does not double-prefix messages that already have the mark", () => {
-    expect(prefixSystemMessage(`${SYSTEM_MARK} already prefixed`)).toBe(
-      `${SYSTEM_MARK} already prefixed`,
-    );
-  });
-
-  it("preserves mark-only messages after trimming", () => {
-    expect(prefixSystemMessage(`  ${SYSTEM_MARK}  `)).toBe(SYSTEM_MARK);
+    ["thread notice", `${SYSTEM_MARK} thread notice`, false],
+    [`  thread notice  `, `${SYSTEM_MARK} thread notice`, false],
+    ["   ", "", false],
+    [`${SYSTEM_MARK} already prefixed`, `${SYSTEM_MARK} already prefixed`, true],
+    [`  ${SYSTEM_MARK} hello`, `${SYSTEM_MARK} hello`, true],
+    [SYSTEM_MARK, SYSTEM_MARK, true],
+    [`  ${SYSTEM_MARK}  `, SYSTEM_MARK, true],
+    ["", "", false],
+    ["hello", `${SYSTEM_MARK} hello`, false],
+  ])("handles %j", (input, prefixed, marked) => {
+    expect(prefixSystemMessage(input)).toBe(prefixed);
+    expect(hasSystemMark(input)).toBe(marked);
   });
 });

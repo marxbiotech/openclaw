@@ -1,2 +1,16 @@
-export { probeGoogleChat, sendGoogleChatMessage, uploadGoogleChatAttachment } from "./api.js";
-export { resolveGoogleChatWebhookPath, startGoogleChatMonitor } from "./monitor.js";
+// Googlechat plugin module implements channel behavior.
+import {
+  probeGoogleChat as probeGoogleChatImpl,
+  sendGoogleChatMessage as sendGoogleChatMessageImpl,
+} from "./api.js";
+import {
+  resolveGoogleChatWebhookPath as resolveGoogleChatWebhookPathImpl,
+  startGoogleChatMonitor as startGoogleChatMonitorImpl,
+} from "./monitor.js";
+
+export const googleChatChannelRuntime = {
+  probeGoogleChat: probeGoogleChatImpl,
+  sendGoogleChatMessage: sendGoogleChatMessageImpl,
+  resolveGoogleChatWebhookPath: resolveGoogleChatWebhookPathImpl,
+  startGoogleChatMonitor: startGoogleChatMonitorImpl,
+};

@@ -1,94 +1,164 @@
+// Persists device authorization records for paired nodes.
 import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
+import type { DeviceAuthEntry } from "../shared/device-auth.js";
+import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "../state/openclaw-state-db-readonly.js";
 import {
-  clearDeviceAuthTokenFromStore,
-  type DeviceAuthEntry,
-  loadDeviceAuthTokenFromStore,
-  storeDeviceAuthTokenInStore,
-} from "../shared/device-auth-store.js";
-import type { DeviceAuthStore } from "../shared/device-auth.js";
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
+import {
+  clearDeviceAuthTokenFromDatabase,
+  clearOriginDeviceTokenInDatabase,
+  createDeviceAuthEntry,
+  type DeviceAuthTokenObservation,
+  readDeviceAuthTokenObservationFromDatabase,
+  readDeviceAuthTokensFromDatabase,
+  readOriginDeviceTokenObservationFromDatabase,
+  storeDeviceAuthTokenInDatabase,
+  storeOriginDeviceTokenInDatabase,
+} from "./device-auth-store.kernel.js";
 
-const DEVICE_AUTH_FILE = "device-auth.json";
+export { clearDeviceAuthTokenFromDatabase } from "./device-auth-store.kernel.js";
 
-function resolveDeviceAuthPath(env: NodeJS.ProcessEnv = process.env): string {
-  return path.join(resolveStateDir(env), "identity", DEVICE_AUTH_FILE);
-}
+// The Gateway lock makes state-directory contents process-stable. Cache both
+// outcomes to keep reconnects free of freshness polling; Doctor invalidates
+// the entry after its exclusive legacy import removes the retired file.
+const legacyPresenceCache = new Map<string, boolean>();
 
-function readStore(filePath: string): DeviceAuthStore | null {
-  try {
-    if (!fs.existsSync(filePath)) {
-      return null;
-    }
-    const raw = fs.readFileSync(filePath, "utf8");
-    const parsed = JSON.parse(raw) as DeviceAuthStore;
-    if (parsed?.version !== 1 || typeof parsed.deviceId !== "string") {
-      return null;
-    }
-    if (!parsed.tokens || typeof parsed.tokens !== "object") {
-      return null;
-    }
-    return parsed;
-  } catch {
-    return null;
+function assertNoLegacyDeviceAuth(env: NodeJS.ProcessEnv | undefined): void {
+  const stateDir = resolveStateDir(env);
+  let hasLegacy = legacyPresenceCache.get(stateDir);
+  if (hasLegacy === undefined) {
+    hasLegacy = fs.existsSync(path.join(stateDir, "identity", "device-auth.json"));
+    legacyPresenceCache.set(stateDir, hasLegacy);
+  }
+  if (hasLegacy) {
+    throw new Error(
+      "Legacy device auth requires migration; stop the Gateway and run `openclaw doctor --fix`.",
+    );
   }
 }
 
-function writeStore(filePath: string, store: DeviceAuthStore): void {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, `${JSON.stringify(store, null, 2)}\n`, { mode: 0o600 });
-  try {
-    fs.chmodSync(filePath, 0o600);
-  } catch {
-    // best-effort
-  }
+/** Forget one process-local legacy-state probe after Doctor removes the source. */
+export function resetLegacyDeviceAuthPresenceCache(env: NodeJS.ProcessEnv): void {
+  legacyPresenceCache.delete(resolveStateDir(env));
 }
 
-export function loadDeviceAuthToken(params: {
-  deviceId: string;
-  role: string;
-  env?: NodeJS.ProcessEnv;
-}): DeviceAuthEntry | null {
-  const filePath = resolveDeviceAuthPath(params.env);
-  return loadDeviceAuthTokenFromStore({
-    adapter: { readStore: () => readStore(filePath), writeStore: (_store) => {} },
-    deviceId: params.deviceId,
-    role: params.role,
-  });
-}
-
-export function storeDeviceAuthToken(params: {
-  deviceId: string;
-  role: string;
+type DeviceAuthLookup = { deviceId: string; role: string; env?: NodeJS.ProcessEnv };
+type OriginDeviceAuthLookup = DeviceAuthLookup & { gatewayScope: string };
+type DeviceAuthRead = {
+  onSnapshot?: (observation: DeviceAuthTokenObservation) => void;
+};
+type DeviceAuthWrite = DeviceAuthLookup & {
   token: string;
   scopes?: string[];
-  env?: NodeJS.ProcessEnv;
-}): DeviceAuthEntry {
-  const filePath = resolveDeviceAuthPath(params.env);
-  return storeDeviceAuthTokenInStore({
-    adapter: {
-      readStore: () => readStore(filePath),
-      writeStore: (store) => writeStore(filePath, store),
-    },
-    deviceId: params.deviceId,
-    role: params.role,
-    token: params.token,
-    scopes: params.scopes,
-  });
+  expectedToken?: string | null;
+};
+type DeviceAuthClear = DeviceAuthLookup & {
+  expectedToken?: string;
+  observedToken?: string;
+};
+
+export function loadDeviceAuthToken(
+  params: DeviceAuthLookup & DeviceAuthRead,
+): DeviceAuthEntry | null {
+  assertNoLegacyDeviceAuth(params.env);
+  const { db } = openOpenClawStateDatabase({ env: params.env });
+  const observation = readDeviceAuthTokenObservationFromDatabase(db, params);
+  params.onSnapshot?.(observation);
+  return observation.entry;
 }
 
-export function clearDeviceAuthToken(params: {
+export function loadDeviceAuthTokenReadOnly(
+  params: DeviceAuthLookup & DeviceAuthRead,
+): DeviceAuthEntry | null {
+  assertNoLegacyDeviceAuth(params.env);
+  const observation = withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
+    ({ db }) => readDeviceAuthTokenObservationFromDatabase(db, params),
+    { env: params.env },
+  ) ?? { entry: null, expectedToken: null };
+  params.onSnapshot?.(observation);
+  return observation.entry;
+}
+
+export function loadDeviceAuthTokens(params: {
   deviceId: string;
-  role: string;
   env?: NodeJS.ProcessEnv;
-}): void {
-  const filePath = resolveDeviceAuthPath(params.env);
-  clearDeviceAuthTokenFromStore({
-    adapter: {
-      readStore: () => readStore(filePath),
-      writeStore: (store) => writeStore(filePath, store),
-    },
-    deviceId: params.deviceId,
-    role: params.role,
-  });
+}): DeviceAuthEntry[] {
+  assertNoLegacyDeviceAuth(params.env);
+  const { db } = openOpenClawStateDatabase({ env: params.env });
+  return readDeviceAuthTokensFromDatabase(db, params);
+}
+
+export function storeDeviceAuthToken(params: DeviceAuthWrite): DeviceAuthEntry | null {
+  assertNoLegacyDeviceAuth(params.env);
+  const entry = createDeviceAuthEntry(params);
+  return runOpenClawStateWriteTransaction(
+    ({ db }) =>
+      storeDeviceAuthTokenInDatabase(db, {
+        deviceId: params.deviceId,
+        ...entry,
+        expectedToken: params.expectedToken,
+      }),
+    { env: params.env },
+  );
+}
+
+export function clearDeviceAuthToken(params: DeviceAuthClear): boolean {
+  assertNoLegacyDeviceAuth(params.env);
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => clearDeviceAuthTokenFromDatabase(db, params),
+    { env: params.env },
+  );
+}
+
+export function loadOriginDeviceToken(
+  params: OriginDeviceAuthLookup & DeviceAuthRead,
+): DeviceAuthEntry | null {
+  assertNoLegacyDeviceAuth(params.env);
+  const { db } = openOpenClawStateDatabase({ env: params.env });
+  const observation = readOriginDeviceTokenObservationFromDatabase(db, params);
+  params.onSnapshot?.(observation);
+  return observation.entry;
+}
+
+export function loadOriginDeviceTokenReadOnly(
+  params: OriginDeviceAuthLookup & DeviceAuthRead,
+): DeviceAuthEntry | null {
+  assertNoLegacyDeviceAuth(params.env);
+  const observation = withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
+    ({ db }) => readOriginDeviceTokenObservationFromDatabase(db, params),
+    { env: params.env },
+  ) ?? { entry: null, expectedToken: null };
+  params.onSnapshot?.(observation);
+  return observation.entry;
+}
+
+export function storeOriginDeviceToken(
+  params: DeviceAuthWrite & { gatewayScope: string },
+): DeviceAuthEntry | null {
+  assertNoLegacyDeviceAuth(params.env);
+  const entry = createDeviceAuthEntry(params);
+  return runOpenClawStateWriteTransaction(
+    ({ db }) =>
+      storeOriginDeviceTokenInDatabase(db, {
+        gatewayScope: params.gatewayScope,
+        deviceId: params.deviceId,
+        ...entry,
+        expectedToken: params.expectedToken,
+      }),
+    { env: params.env },
+  );
+}
+
+export function clearOriginDeviceToken(
+  params: DeviceAuthClear & { gatewayScope: string },
+): boolean {
+  assertNoLegacyDeviceAuth(params.env);
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => clearOriginDeviceTokenInDatabase(db, params),
+    { env: params.env },
+  );
 }

@@ -1,30 +1,35 @@
+// Lists available agents and conversation bindings.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { buildSubagentRunReadIndex } from "../../../agents/subagents/registry/subagent-registry-read.js";
+import { buildSubagentRunView } from "../../../agents/subagents/registry/subagent-run-view.js";
+import { getChannelPlugin, normalizeChannelId } from "../../../channels/plugins/index.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
+import { resolveChannelAccountId, resolveCommandSurfaceChannel } from "../channel-context.js";
+import { commandReply } from "../command-gates.js";
 import type { CommandHandlerResult } from "../commands-types.js";
-import { formatRunLabel, sortSubagentRuns } from "../subagents-utils.js";
-import {
-  type SubagentsCommandContext,
-  resolveChannelAccountId,
-  resolveCommandSurfaceChannel,
-  stopWithText,
-} from "./shared.js";
+import { formatRunLabel } from "../subagents-utils.js";
+import { RECENT_WINDOW_MINUTES, type SubagentsCommandContext } from "./shared.js";
 
-function formatConversationBindingText(params: {
-  channel: string;
-  conversationId: string;
-}): string {
-  if (params.channel === "discord") {
-    return `thread:${params.conversationId}`;
-  }
-  if (params.channel === "telegram") {
-    return `conversation:${params.conversationId}`;
-  }
+function formatConversationBindingText(params: { conversationId: string }): string {
   return `binding:${params.conversationId}`;
+}
+
+function supportsConversationBindings(channel: string): boolean {
+  const channelId = normalizeChannelId(channel);
+  if (!channelId) {
+    return false;
+  }
+  return (
+    getChannelPlugin(channelId)?.conversationBindings?.supportsCurrentConversationBinding === true
+  );
 }
 
 export function handleSubagentsAgentsAction(ctx: SubagentsCommandContext): CommandHandlerResult {
   const { params, requesterKey, runs } = ctx;
+  const readIndex = buildSubagentRunReadIndex();
   const channel = resolveCommandSurfaceChannel(params);
   const accountId = resolveChannelAccountId(params);
+  const currentConversationBindingsSupported = supportsConversationBindings(channel);
   const bindingService = getSessionBindingService();
   const bindingsBySession = new Map<string, ReturnType<typeof bindingService.listBySession>>();
 
@@ -45,30 +50,35 @@ export function handleSubagentsAgentsAction(ctx: SubagentsCommandContext): Comma
     return resolved;
   };
 
-  const visibleRuns = sortSubagentRuns(runs).filter((entry) => {
-    if (!entry.endedAt) {
-      return true;
-    }
-    return resolveSessionBindings(entry.childSessionKey).length > 0;
+  const { latest, active, recent } = buildSubagentRunView({
+    runs,
+    recentMinutes: RECENT_WINDOW_MINUTES,
+    countPendingDescendantRuns: (sessionKey) => readIndex.countPendingDescendantRuns(sessionKey),
   });
+  const indexByChildSessionKey = new Map(
+    [...active, ...recent].map((entry, idx) => [entry.childSessionKey, idx + 1] as const),
+  );
+  const activeRuns = new Set(active);
+  const visibleRuns = latest.filter(
+    (entry) => activeRuns.has(entry) || resolveSessionBindings(entry.childSessionKey).length > 0,
+  );
 
   const lines = ["agents:", "-----"];
   if (visibleRuns.length === 0) {
     lines.push("(none)");
   } else {
-    let index = 1;
     for (const entry of visibleRuns) {
       const binding = resolveSessionBindings(entry.childSessionKey)[0];
       const bindingText = binding
         ? formatConversationBindingText({
-            channel,
             conversationId: binding.conversation.conversationId,
           })
-        : channel === "discord" || channel === "telegram"
+        : currentConversationBindingsSupported
           ? "unbound"
-          : "bindings available on discord/telegram";
-      lines.push(`${index}. ${formatRunLabel(entry)} (${bindingText})`);
-      index += 1;
+          : "bindings unavailable";
+      const resolvedIndex = indexByChildSessionKey.get(entry.childSessionKey);
+      const prefix = resolvedIndex ? `${resolvedIndex}.` : "-";
+      lines.push(`${prefix} ${formatRunLabel(entry)} (${bindingText})`);
     }
   }
 
@@ -78,18 +88,14 @@ export function handleSubagentsAgentsAction(ctx: SubagentsCommandContext): Comma
   if (requesterBindings.length > 0) {
     lines.push("", "acp/session bindings:", "-----");
     for (const binding of requesterBindings) {
-      const label =
-        typeof binding.metadata?.label === "string" && binding.metadata.label.trim()
-          ? binding.metadata.label.trim()
-          : binding.targetSessionKey;
+      const label = normalizeOptionalString(binding.metadata?.label) ?? binding.targetSessionKey;
       lines.push(
         `- ${label} (${formatConversationBindingText({
-          channel,
           conversationId: binding.conversation.conversationId,
         })}, session:${binding.targetSessionKey})`,
       );
     }
   }
 
-  return stopWithText(lines.join("\n"));
+  return commandReply(lines.join("\n"));
 }

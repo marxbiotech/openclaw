@@ -1,18 +1,18 @@
+// Vitest harness for daemon lifecycle-core service and runtime dependencies.
 import { vi } from "vitest";
 import type { GatewayService } from "../../../daemon/service.js";
-import type { RuntimeEnv } from "../../../runtime.js";
 import type { MockFn } from "../../../test-utils/vitest-mock-fn.js";
+import { createCliRuntimeCapture } from "../../test-runtime-capture.js";
 
-export const runtimeLogs: string[] = [];
-
-type LifecycleRuntimeHarness = RuntimeEnv & {
-  error: MockFn<RuntimeEnv["error"]>;
-  exit: MockFn<RuntimeEnv["exit"]>;
-};
+const lifecycleRuntimeCapture = createCliRuntimeCapture();
+export const lifecycleRuntimeLogs = lifecycleRuntimeCapture.runtimeLogs;
+type LifecycleRuntimeHarness = typeof lifecycleRuntimeCapture.defaultRuntime;
 
 type LifecycleServiceHarness = GatewayService & {
+  stage: MockFn<GatewayService["stage"]>;
   install: MockFn<GatewayService["install"]>;
   uninstall: MockFn<GatewayService["uninstall"]>;
+  start: MockFn<GatewayService["start"]>;
   stop: MockFn<GatewayService["stop"]>;
   isLoaded: MockFn<GatewayService["isLoaded"]>;
   readCommand: MockFn<GatewayService["readCommand"]>;
@@ -20,22 +20,36 @@ type LifecycleServiceHarness = GatewayService & {
   restart: MockFn<GatewayService["restart"]>;
 };
 
-export const defaultRuntime: LifecycleRuntimeHarness = {
-  log: (...args: unknown[]) => {
-    runtimeLogs.push(args.map((arg) => String(arg)).join(" "));
-  },
-  error: vi.fn(),
-  exit: vi.fn((code: number) => {
-    throw new Error(`__exit__:${code}`);
-  }),
-};
+export const lifecycleTestRuntime: LifecycleRuntimeHarness = lifecycleRuntimeCapture.defaultRuntime;
+
+export function createGatewayUninstallArgs() {
+  return {
+    serviceNoun: "Gateway",
+    service,
+    opts: { json: true as const },
+    stopBeforeUninstall: true,
+    assertNotLoadedAfterUninstall: true,
+  };
+}
+
+export function createGatewayServiceRunArgs(checkTokenDrift?: boolean) {
+  return {
+    serviceNoun: "Gateway",
+    service,
+    renderStartHints: () => [],
+    opts: { json: true as const },
+    ...(checkTokenDrift ? { checkTokenDrift } : {}),
+  };
+}
 
 export const service: LifecycleServiceHarness = {
   label: "TestService",
   loadedText: "loaded",
   notLoadedText: "not loaded",
+  stage: vi.fn(),
   install: vi.fn(),
   uninstall: vi.fn(),
+  start: vi.fn(),
   stop: vi.fn(),
   isLoaded: vi.fn(),
   readCommand: vi.fn(),
@@ -44,22 +58,30 @@ export const service: LifecycleServiceHarness = {
 };
 
 export function resetLifecycleRuntimeLogs() {
-  runtimeLogs.length = 0;
+  lifecycleRuntimeCapture.resetRuntimeCapture();
 }
 
 export function resetLifecycleServiceMocks() {
-  service.isLoaded.mockClear();
-  service.readCommand.mockClear();
-  service.restart.mockClear();
+  service.stage.mockReset();
+  service.install.mockReset();
+  service.uninstall.mockReset();
+  service.start.mockReset();
+  service.stop.mockReset();
+  service.isLoaded.mockReset();
+  service.readCommand.mockReset();
+  service.readRuntime.mockReset();
+  service.restart.mockReset();
   service.isLoaded.mockResolvedValue(true);
   service.readCommand.mockResolvedValue({ programArguments: [], environment: {} });
+  service.readRuntime.mockResolvedValue({ status: "stopped" });
+  service.stop.mockResolvedValue(undefined);
+  service.uninstall.mockResolvedValue(undefined);
+  service.start.mockResolvedValue(undefined);
   service.restart.mockResolvedValue({ outcome: "completed" });
 }
 
 export function stubEmptyGatewayEnv() {
   vi.unstubAllEnvs();
   vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "");
-  vi.stubEnv("CLAWDBOT_GATEWAY_TOKEN", "");
   vi.stubEnv("OPENCLAW_GATEWAY_URL", "");
-  vi.stubEnv("CLAWDBOT_GATEWAY_URL", "");
 }

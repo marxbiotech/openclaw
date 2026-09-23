@@ -1,41 +1,16 @@
-import { resolveTextChunkLimit } from "../../../src/auto-reply/chunk.js";
-import { getChannelDock } from "../../../src/channels/dock.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import { resolveAccountEntry } from "../../../src/routing/account-lookup.js";
-import { normalizeAccountId } from "../../../src/routing/session-key.js";
-
-const DEFAULT_DISCORD_DRAFT_STREAM_MIN = 200;
-const DEFAULT_DISCORD_DRAFT_STREAM_MAX = 800;
+// Discord plugin module implements draft chunking behavior.
+import {
+  resolveChannelDraftStreamingChunking,
+  type ChannelDraftStreamingChunking,
+} from "openclaw/plugin-sdk/channel-outbound";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { DISCORD_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
 
 export function resolveDiscordDraftStreamingChunking(
-  cfg: OpenClawConfig | undefined,
+  cfg: OpenClawConfig,
   accountId?: string | null,
-): {
-  minChars: number;
-  maxChars: number;
-  breakPreference: "paragraph" | "newline" | "sentence";
-} {
-  const providerChunkLimit = getChannelDock("discord")?.outbound?.textChunkLimit;
-  const textLimit = resolveTextChunkLimit(cfg, "discord", accountId, {
-    fallbackLimit: providerChunkLimit,
+): ChannelDraftStreamingChunking {
+  return resolveChannelDraftStreamingChunking(cfg, "discord", accountId, {
+    fallbackLimit: DISCORD_TEXT_CHUNK_LIMIT,
   });
-  const normalizedAccountId = normalizeAccountId(accountId);
-  const accountCfg = resolveAccountEntry(cfg?.channels?.discord?.accounts, normalizedAccountId);
-  const draftCfg = accountCfg?.draftChunk ?? cfg?.channels?.discord?.draftChunk;
-
-  const maxRequested = Math.max(
-    1,
-    Math.floor(draftCfg?.maxChars ?? DEFAULT_DISCORD_DRAFT_STREAM_MAX),
-  );
-  const maxChars = Math.max(1, Math.min(maxRequested, textLimit));
-  const minRequested = Math.max(
-    1,
-    Math.floor(draftCfg?.minChars ?? DEFAULT_DISCORD_DRAFT_STREAM_MIN),
-  );
-  const minChars = Math.min(minRequested, maxChars);
-  const breakPreference =
-    draftCfg?.breakPreference === "newline" || draftCfg?.breakPreference === "sentence"
-      ? draftCfg.breakPreference
-      : "paragraph";
-  return { minChars, maxChars, breakPreference };
 }

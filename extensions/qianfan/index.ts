@@ -1,37 +1,22 @@
-import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import { buildQianfanProvider } from "../../src/agents/models-config.providers.static.js";
+// Qianfan plugin entrypoint registers its OpenClaw integration.
+import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
+import { applyQianfanConfig, QIANFAN_DEFAULT_MODEL_REF } from "./onboard.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 const PROVIDER_ID = "qianfan";
 
-const qianfanPlugin = {
+export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
   name: "Qianfan Provider",
   description: "Bundled Qianfan provider plugin",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
-    api.registerProvider({
-      id: PROVIDER_ID,
-      label: "Qianfan",
-      docsPath: "/providers/qianfan",
-      envVars: ["QIANFAN_API_KEY"],
-      auth: [],
-      catalog: {
-        order: "simple",
-        run: async (ctx) => {
-          const apiKey = ctx.resolveProviderApiKey(PROVIDER_ID).apiKey;
-          if (!apiKey) {
-            return null;
-          }
-          return {
-            provider: {
-              ...buildQianfanProvider(),
-              apiKey,
-            },
-          };
-        },
-      },
-    });
+  manifest,
+  provider: {
+    label: "Qianfan",
+    docsPath: "/providers/qianfan",
+    manifestAuth: {
+      defaultModel: QIANFAN_DEFAULT_MODEL_REF,
+      applyConfig: applyQianfanConfig,
+    },
+    catalog: { liveModelDiscovery: true, discoveryMode: "strict" },
   },
-};
-
-export default qianfanPlugin;
+});

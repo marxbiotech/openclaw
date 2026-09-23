@@ -1,54 +1,78 @@
-import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
-import type { GatewayService } from "../daemon/service.js";
+// Reads service manager state for status reports.
+// Converts gateway/node launchd/systemd state into a compact summary shape.
 
-export type ServiceStatusSummary = {
+import { OPENCLAW_WRAPPER_ENV_KEY } from "../daemon/program-args.js";
+import { formatServiceLabel } from "../daemon/runtime-format.js";
+import {
+  summarizeGatewayServiceLayout,
+  type GatewayServiceLayoutSummary,
+} from "../daemon/service-layout.js";
+import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
+import type {
+  GatewayServiceCommandConfig,
+  GatewayServiceLoadState,
+} from "../daemon/service-types.js";
+import { readGatewayServiceState, type GatewayService } from "../daemon/service.js";
+
+type ServiceStatusSummary = {
   label: string;
   installed: boolean | null;
-  loaded: boolean;
+  loadState: GatewayServiceLoadState;
   managedByOpenClaw: boolean;
   externallyManaged: boolean;
   loadedText: string;
   runtime: GatewayServiceRuntime | undefined;
+  layout?: GatewayServiceLayoutSummary;
+  wrapperPath?: string;
 };
 
+function normalizeServiceWrapperPath(
+  command: GatewayServiceCommandConfig | null,
+): string | undefined {
+  const wrapperPath = command?.environment?.[OPENCLAW_WRAPPER_ENV_KEY]?.trim();
+  return wrapperPath || undefined;
+}
+
+/** Reads a daemon service summary, falling back to unknown when service inspection fails. */
 export async function readServiceStatusSummary(
   service: GatewayService,
   fallbackLabel: string,
+  timeoutMs?: number,
 ): Promise<ServiceStatusSummary> {
   try {
-    const command = await service.readCommand(process.env).catch(() => null);
-    const serviceEnv = command?.environment
-      ? ({
-          ...process.env,
-          ...command.environment,
-        } satisfies NodeJS.ProcessEnv)
-      : process.env;
-    const [loaded, runtime] = await Promise.all([
-      service.isLoaded({ env: serviceEnv }).catch(() => false),
-      service.readRuntime(serviceEnv).catch(() => undefined),
-    ]);
-    const managedByOpenClaw = command != null;
-    const externallyManaged = !managedByOpenClaw && runtime?.status === "running";
+    const state = await readGatewayServiceState(service, { env: process.env, timeoutMs });
+    // Layout is optional enrichment; a broken manifest or inaccessible path
+    // must not erase service-manager evidence that the gateway is running.
+    const layout = await summarizeGatewayServiceLayout(state.command).catch(() => undefined);
+    const wrapperPath = normalizeServiceWrapperPath(state.command);
+    const managedByOpenClaw = state.installed;
+    // A running unmanaged process still counts as installed for status display.
+    const externallyManaged = !managedByOpenClaw && state.running;
     const installed = managedByOpenClaw || externallyManaged;
     const loadedText = externallyManaged
       ? "running (externally managed)"
-      : loaded
+      : state.loadState.status === "loaded"
         ? service.loadedText
-        : service.notLoadedText;
+        : state.loadState.status === "not-loaded"
+          ? service.notLoadedText
+          : "unknown";
     return {
-      label: service.label,
+      label: formatServiceLabel(service.label, state.runtime),
       installed,
-      loaded,
+      loadState: state.loadState,
       managedByOpenClaw,
       externallyManaged,
       loadedText,
-      runtime,
+      runtime: state.runtime,
+      ...(layout ? { layout } : {}),
+      ...(wrapperPath ? { wrapperPath } : {}),
     };
-  } catch {
+  } catch (error) {
+    // Status output should survive service-manager errors and show an unknown row.
     return {
       label: fallbackLabel,
       installed: null,
-      loaded: false,
+      loadState: { status: "unknown", detail: String(error) },
       managedByOpenClaw: false,
       externallyManaged: false,
       loadedText: "unknown",

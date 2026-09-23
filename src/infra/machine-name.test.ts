@@ -1,15 +1,11 @@
+// Covers machine name resolution fallback behavior.
 import os from "node:os";
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { importFreshModule } from "../../test/helpers/import-fresh.js";
 
-const execFileMock = vi.hoisted(() => vi.fn());
+const runExecMock = vi.hoisted(() => vi.fn());
 
-vi.mock("node:child_process", () => ({
-  execFile: (...args: unknown[]) => execFileMock(...args),
-}));
-
-const originalVitest = process.env.VITEST;
-const originalNodeEnv = process.env.NODE_ENV;
+vi.mock("../process/exec.js", () => ({ runExec: runExecMock }));
 
 async function importMachineName(scope: string) {
   return await importFreshModule<typeof import("./machine-name.js")>(
@@ -19,36 +15,37 @@ async function importMachineName(scope: string) {
 }
 
 afterEach(() => {
-  execFileMock.mockReset();
+  runExecMock.mockReset();
   vi.restoreAllMocks();
-  if (originalVitest === undefined) {
-    delete process.env.VITEST;
-  } else {
-    process.env.VITEST = originalVitest;
-  }
-  if (originalNodeEnv === undefined) {
-    delete process.env.NODE_ENV;
-  } else {
-    process.env.NODE_ENV = originalNodeEnv;
-  }
 });
 
 describe("getMachineDisplayName", () => {
-  it("uses the hostname fallback in test mode and strips a trimmed .local suffix", async () => {
-    const hostnameSpy = vi.spyOn(os, "hostname").mockReturnValue("  clawbox.LOCAL  ");
-    const machineName = await importMachineName("test-fallback");
+  it.each([
+    {
+      name: "uses the hostname fallback in test mode and strips a trimmed .local suffix",
+      scope: "test-fallback",
+      hostname: "  clawbox.LOCAL  ",
+      expected: "clawbox",
+      expectedCalls: 1,
+      repeatLookup: true,
+    },
+    {
+      name: "falls back to the default product name when hostname is blank",
+      scope: "blank-hostname",
+      hostname: "   ",
+      expected: "openclaw",
+      expectedCalls: 1,
+      repeatLookup: false,
+    },
+  ])("$name", async ({ scope, hostname, expected, expectedCalls, repeatLookup }) => {
+    const hostnameSpy = vi.spyOn(os, "hostname").mockReturnValue(hostname);
+    const machineName = await importMachineName(scope);
 
-    await expect(machineName.getMachineDisplayName()).resolves.toBe("clawbox");
-    await expect(machineName.getMachineDisplayName()).resolves.toBe("clawbox");
-    expect(hostnameSpy).toHaveBeenCalledTimes(1);
-    expect(execFileMock).not.toHaveBeenCalled();
-  });
-
-  it("falls back to the default product name when hostname is blank", async () => {
-    vi.spyOn(os, "hostname").mockReturnValue("   ");
-    const machineName = await importMachineName("blank-hostname");
-
-    await expect(machineName.getMachineDisplayName()).resolves.toBe("openclaw");
-    expect(execFileMock).not.toHaveBeenCalled();
+    await expect(machineName.getMachineDisplayName()).resolves.toBe(expected);
+    if (repeatLookup) {
+      await expect(machineName.getMachineDisplayName()).resolves.toBe(expected);
+    }
+    expect(hostnameSpy).toHaveBeenCalledTimes(expectedCalls);
+    expect(runExecMock).not.toHaveBeenCalled();
   });
 });

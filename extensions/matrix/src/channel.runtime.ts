@@ -1,6 +1,21 @@
-export { listMatrixDirectoryGroupsLive, listMatrixDirectoryPeersLive } from "./directory-live.js";
-export { resolveMatrixAuth } from "./matrix/client.js";
-export { probeMatrix } from "./matrix/probe.js";
-export { sendMessageMatrix } from "./matrix/send.js";
-export { resolveMatrixTargets } from "./resolve-targets.js";
-export { matrixOutbound } from "./outbound.js";
+// Matrix plugin module implements channel behavior.
+import { listMatrixDirectoryGroupsLive, listMatrixDirectoryPeersLive } from "./directory-live.js";
+import { resolveMatrixAuth } from "./matrix/client.js";
+import { cleanupMatrixDeliveryPlans, reconcileMatrixUnknownSend } from "./matrix/delivery-plan.js";
+import { probeMatrix } from "./matrix/probe.js";
+import { sendMessageMatrix, sendTypingMatrix } from "./matrix/send.js";
+import { matrixOutbound } from "./outbound.js";
+import { resolveMatrixTargets } from "./resolve-targets.js";
+
+export const matrixChannelRuntime = {
+  cleanupMatrixDeliveryPlans,
+  listMatrixDirectoryGroupsLive,
+  listMatrixDirectoryPeersLive,
+  matrixOutbound,
+  probeMatrix,
+  resolveMatrixAuth,
+  resolveMatrixTargets,
+  reconcileMatrixUnknownSend,
+  sendMessageMatrix,
+  sendTypingMatrix,
+};

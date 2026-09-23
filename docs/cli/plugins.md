@@ -1,121 +1,134 @@
 ---
-summary: "CLI reference for `openclaw plugins` (list, install, uninstall, enable/disable, doctor)"
+summary: "CLI reference for `openclaw plugins` (init, build, validate, list, install, reload, marketplace, uninstall, enable/disable, doctor)"
 read_when:
   - You want to install or manage Gateway plugins or compatible bundles
+  - You want to scaffold or validate a simple tool plugin
   - You want to debug plugin load failures
-title: "plugins"
+title: "Plugins CLI"
+sidebarTitle: "Plugins"
 ---
 
 # `openclaw plugins`
 
-Manage Gateway plugins/extensions and compatible bundles.
+Manage Gateway plugins, hook packs, and compatible bundles.
 
-Related:
-
-- Plugin system: [Plugins](/tools/plugin)
-- Bundle compatibility: [Plugin bundles](/plugins/bundles)
-- Plugin manifest + schema: [Plugin manifest](/plugins/manifest)
-- Security hardening: [Security](/gateway/security)
+<CardGroup cols={2}>
+  <Card title="Plugin system" href="/tools/plugin">
+    End-user guide for installing, enabling, and troubleshooting plugins.
+  </Card>
+  <Card title="Manage plugins" href="/plugins/manage-plugins">
+    Quick examples for install, list, update, uninstall, and publishing.
+  </Card>
+  <Card title="Plugin bundles" href="/plugins/bundles">
+    Bundle compatibility model.
+  </Card>
+  <Card title="Plugin manifest" href="/plugins/manifest">
+    Manifest fields and config schema.
+  </Card>
+  <Card title="Security" href="/gateway/security">
+    Security hardening for plugin installs.
+  </Card>
+</CardGroup>
 
 ## Commands
 
 ```bash
-openclaw plugins list
-openclaw plugins info <id>
-openclaw plugins enable <id>
-openclaw plugins disable <id>
-openclaw plugins uninstall <id>
-openclaw plugins doctor
-openclaw plugins update <id>
-openclaw plugins update --all
+openclaw plugins list [--enabled] [--verbose] [--json]
+openclaw plugins search <query> [--limit <n>] [--json]
+openclaw plugins install <path-or-spec> [--link] [--force] [--pin] [--accept-capabilities] [--acknowledge-install-policy-warning] [--marketplace <source>]
+openclaw plugins inspect <id> [--runtime] [--json]
+openclaw plugins inspect --all [--runtime] [--json]
+openclaw plugins info <id>                    # alias for inspect
+openclaw plugins enable <ids...> [--accept-capabilities]
+openclaw plugins disable <ids...>
+openclaw plugins reload <ids...> [--accept-capabilities] [--json]
+openclaw plugins uninstall <ids...> [--dry-run] [--keep-files] [--force]
+openclaw plugins update <ids-or-npm-specs...> | --all [--dry-run]
+openclaw plugins registry [--refresh] [--json]
+openclaw plugins doctor [--json]
+openclaw plugins init <id> [--name <name>] [--type tool|provider|feature] [--directory <path>]
+openclaw plugins build [--root <path>] [--entry <path>] [--check]
+openclaw plugins validate [--root <path>] [--entry <path>] [--json]
+openclaw plugins pack [--root <path>] [--out <file.tgz>] [--json]
+openclaw plugins marketplace entries [--offline] [--feed-profile <name>] [--json]
+openclaw plugins marketplace list <source> [--json]
+openclaw plugins marketplace refresh [--feed-profile <name>] [--expected-sha256 <sha256>] [--json]
 ```
 
-Bundled plugins ship with OpenClaw but start disabled. Use `plugins enable` to
-activate them.
+For slow install, inspect, uninstall, or registry-refresh investigation, run the
+command with `OPENCLAW_PLUGIN_LIFECYCLE_TRACE=1`. The trace writes phase timings
+to stderr and keeps JSON output parseable. See [Debugging](/help/debugging#plugin-lifecycle-trace).
 
-Native OpenClaw plugins must ship `openclaw.plugin.json` with an inline JSON
-Schema (`configSchema`, even if empty). Compatible bundles use their own bundle
-manifests instead.
+<Note>
+In Nix mode (`OPENCLAW_NIX_MODE=1`), `openclaw.json` is immutable. `install`, `update`, `uninstall`, `enable`, and `disable` all refuse to run. Manage those choices in the Nix source for this install (`programs.openclaw.config` or `instances.<name>.config` for nix-openclaw), then rebuild. Reload remains available when no new capability consent needs to be recorded; it preserves config and installation state. See the agent-first [Quick Start](https://github.com/openclaw/nix-openclaw#quick-start).
+</Note>
 
-`plugins list` shows `Format: openclaw` or `Format: bundle`. Verbose list/info
-output also shows the bundle subtype (`codex`, `claude`, or `cursor`) plus detected bundle
-capabilities.
+<Note>
+Bundled plugins ship with OpenClaw. Some are enabled by default (for example bundled model providers, bundled speech providers, and the bundled browser plugin); others require `plugins enable`.
 
-### Install
+Native OpenClaw plugins ship `openclaw.plugin.json` with an inline JSON Schema (`configSchema`, even if empty). Compatible bundles use their own bundle manifests instead.
 
-```bash
-openclaw plugins install <path-or-spec>
-openclaw plugins install <npm-spec> --pin
-```
+`plugins list` shows `Format: openclaw` or `Format: bundle`. Verbose list/info output also shows the bundle subtype (`agent (Agent Plugins)`, `codex`, `claude`, or `cursor`) plus detected bundle capabilities.
+</Note>
 
-Security note: treat plugin installs like running code. Prefer pinned versions.
+## Plugins pages
 
-Npm specs are **registry-only** (package name + optional **exact version** or
-**dist-tag**). Git/URL/file specs and semver ranges are rejected. Dependency
-installs run with `--ignore-scripts` for safety.
+This page is an index. `openclaw plugins` is documented on six pages, one per
+reader job. Open the page that matches your task.
 
-Bare specs and `@latest` stay on the stable track. If npm resolves either of
-those to a prerelease, OpenClaw stops and asks you to opt in explicitly with a
-prerelease tag such as `@beta`/`@rc` or an exact prerelease version such as
-`@1.2.3-beta.4`.
+| Page                                                              | Read it when                                                                     |
+| ----------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| [Author plugins](/cli/plugins/authoring)                          | You are scaffolding, building, validating, or packing a plugin project.          |
+| [Install plugins](/cli/plugins/install)                           | You are installing from ClawHub, npm, git, a path, an archive, or a marketplace. |
+| [List installed plugins](/cli/plugins/list)                       | You want the installed inventory, discovery diagnostics, or the plugin index.    |
+| [Uninstall and update plugins](/cli/plugins/uninstall-and-update) | You are removing or reloading a plugin, or updating its version and source.      |
+| [Inspect and diagnose plugins](/cli/plugins/inspect-and-diagnose) | You need plugin identity, runtime registrations, load errors, or registry state. |
+| [Marketplace feeds](/cli/plugins/marketplace)                     | You are browsing, listing, or refreshing a marketplace or hosted signed feed.    |
 
-If a bare install spec matches a bundled plugin id (for example `diffs`), OpenClaw
-installs the bundled plugin directly. To install an npm package with the same
-name, use an explicit scoped spec (for example `@scope/diffs`).
+## Where each section moved
 
-Supported archives: `.zip`, `.tgz`, `.tar.gz`, `.tar`.
+Every section anchor from the previous single-page version keeps its id here,
+so an existing link such as `/cli/plugins#registry` still resolves. Each entry
+points at the page that now holds the content.
 
-For local paths and archives, OpenClaw auto-detects:
+- <a id="author" />[Author](/cli/plugins/authoring#author)
+- <a id="feature-scaffold-and-artifacts" />[Feature scaffold and artifacts](/cli/plugins/authoring#feature-scaffold-and-artifacts)
+- <a id="provider-scaffold" />[Provider scaffold](/cli/plugins/authoring#provider-scaffold)
+- <a id="install" />[Install](/cli/plugins/install#install)
+- <a id="config-includes-and-invalid-config-repair" />[Config includes and invalid-config repair](/cli/plugins/install#config-includes-and-invalid-config-repair)
+- <a id="force-confirmation-and-reinstall-vs-update" />[`--force` confirmation and reinstall vs update](/cli/plugins/install#force-confirmation-and-reinstall-vs-update)
+- <a id="pin-scope" />[`--pin` scope](/cli/plugins/install#pin-scope)
+- <a id="acknowledge-install-policy-warning" />[`--acknowledge-install-policy-warning`](/cli/plugins/install#acknowledge-install-policy-warning)
+- <a id="clawhub-security-audit" />[ClawHub Security Audit](/cli/plugins/install#clawhub-security-audit)
+- <a id="hook-packs-and-npm-specs" />[Hook packs and npm specs](/cli/plugins/install#hook-packs-and-npm-specs)
+- <a id="git-repositories" />[Git repositories](/cli/plugins/install#git-repositories)
+- <a id="archives" />[Archives](/cli/plugins/install#archives)
+- <a id="marketplace-shorthand" />[Marketplace shorthand](/cli/plugins/install#marketplace-shorthand)
+- <a id="marketplace-sources" />[Marketplace sources](/cli/plugins/install#marketplace-sources)
+- <a id="remote-marketplace-rules" />[Remote marketplace rules](/cli/plugins/install#remote-marketplace-rules)
+- <a id="list" />[List](/cli/plugins/list#list)
+- <a id="param-enabled" />[`--enabled`](/cli/plugins/list#param-enabled)
+- <a id="param-verbose" />[`--verbose`](/cli/plugins/list#param-verbose)
+- <a id="param-json" />[`--json`](/cli/plugins/list#param-json)
+- <a id="plugin-index" />[Plugin index](/cli/plugins/list#plugin-index)
+- <a id="reload" />[Reload](/cli/plugins/uninstall-and-update#reload)
+- <a id="uninstall" />[Uninstall](/cli/plugins/uninstall-and-update#uninstall)
+- <a id="update" />[Update](/cli/plugins/uninstall-and-update#update)
+- <a id="resolving-plugin-id-vs-npm-spec" />[Resolving plugin id vs npm spec](/cli/plugins/uninstall-and-update#resolving-plugin-id-vs-npm-spec)
+- <a id="beta-channel-updates" />[Beta channel updates](/cli/plugins/uninstall-and-update#beta-channel-updates)
+- <a id="existing-plugin-source-choices" />[Existing plugin source choices](/cli/plugins/uninstall-and-update#existing-plugin-source-choices)
+- <a id="version-checks-and-integrity-drift" />[Version checks and integrity drift](/cli/plugins/uninstall-and-update#version-checks-and-integrity-drift)
+- <a id="acknowledge-install-policy-warning-on-update" />[`--acknowledge-install-policy-warning` on update](/cli/plugins/uninstall-and-update#acknowledge-install-policy-warning-on-update)
+- <a id="clawhub-security-audit-on-update" />[ClawHub Security Audit on update](/cli/plugins/uninstall-and-update#clawhub-security-audit-on-update)
+- <a id="inspect" />[Inspect](/cli/plugins/inspect-and-diagnose#inspect)
+- <a id="doctor" />[Doctor](/cli/plugins/inspect-and-diagnose#doctor)
+- <a id="registry" />[Registry](/cli/plugins/inspect-and-diagnose#registry)
+- <a id="marketplace" />[Marketplace](/cli/plugins/marketplace#marketplace)
 
-- native OpenClaw plugins (`openclaw.plugin.json`)
-- Codex-compatible bundles (`.codex-plugin/plugin.json`)
-- Claude-compatible bundles (`.claude-plugin/plugin.json` or the default Claude
-  component layout)
-- Cursor-compatible bundles (`.cursor-plugin/plugin.json`)
+## Related
 
-Compatible bundles install into the normal extensions root and participate in
-the same list/info/enable/disable flow. Today, bundle skills, Claude
-command-skills, Claude `settings.json` defaults, Cursor command-skills, and compatible Codex hook
-directories are supported; other detected bundle capabilities are shown in
-diagnostics/info but are not yet wired into runtime execution.
-
-Use `--link` to avoid copying a local directory (adds to `plugins.load.paths`):
-
-```bash
-openclaw plugins install -l ./my-plugin
-```
-
-Use `--pin` on npm installs to save the resolved exact spec (`name@version`) in
-`plugins.installs` while keeping the default behavior unpinned.
-
-### Uninstall
-
-```bash
-openclaw plugins uninstall <id>
-openclaw plugins uninstall <id> --dry-run
-openclaw plugins uninstall <id> --keep-files
-```
-
-`uninstall` removes plugin records from `plugins.entries`, `plugins.installs`,
-the plugin allowlist, and linked `plugins.load.paths` entries when applicable.
-For active memory plugins, the memory slot resets to `memory-core`.
-
-By default, uninstall also removes the plugin install directory under the active
-state dir extensions root (`$OPENCLAW_STATE_DIR/extensions/<id>`). Use
-`--keep-files` to keep files on disk.
-
-`--keep-config` is supported as a deprecated alias for `--keep-files`.
-
-### Update
-
-```bash
-openclaw plugins update <id>
-openclaw plugins update --all
-openclaw plugins update <id> --dry-run
-```
-
-Updates only apply to plugins installed from npm (tracked in `plugins.installs`).
-
-When a stored integrity hash exists and the fetched artifact hash changes,
-OpenClaw prints a warning and asks for confirmation before proceeding. Use
-global `--yes` to bypass prompts in CI/non-interactive runs.
+- [Building plugins](/plugins/building-plugins)
+- [CLI reference](/cli)
+- [ClawHub](/clawhub)
+- [ClawHub CLI](/clawhub/cli) - standalone registry commands
+- [ClawHub publishing](/clawhub/publishing) - owners, scopes, and release review

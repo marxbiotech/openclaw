@@ -1,37 +1,27 @@
-import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import { buildTogetherProvider } from "../../src/agents/models-config.providers.static.js";
+// Together plugin entrypoint registers its OpenClaw integration.
+import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
+import { applyTogetherConnectionConfig } from "./onboard.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
+import { buildTogetherVideoGenerationProvider } from "./video-generation-provider.js";
 
 const PROVIDER_ID = "together";
 
-const togetherPlugin = {
+export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
   name: "Together Provider",
   description: "Bundled Together provider plugin",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
-    api.registerProvider({
-      id: PROVIDER_ID,
-      label: "Together",
-      docsPath: "/providers/together",
-      envVars: ["TOGETHER_API_KEY"],
-      auth: [],
-      catalog: {
-        order: "simple",
-        run: async (ctx) => {
-          const apiKey = ctx.resolveProviderApiKey(PROVIDER_ID).apiKey;
-          if (!apiKey) {
-            return null;
-          }
-          return {
-            provider: {
-              ...buildTogetherProvider(),
-              apiKey,
-            },
-          };
-        },
-      },
-    });
+  manifest,
+  provider: {
+    label: "Together",
+    docsPath: "/providers/together",
+    manifestAuth: { applyConfig: applyTogetherConnectionConfig },
+    catalog: { liveModelDiscovery: true, discoveryMode: "strict" },
+    classifyFailoverReason: ({ errorMessage }) =>
+      /\bconcurrency limit\b.*\b(?:breached|reached)\b/i.test(errorMessage)
+        ? "rate_limit"
+        : undefined,
   },
-};
-
-export default togetherPlugin;
+  register(api) {
+    api.registerVideoGenerationProvider(buildTogetherVideoGenerationProvider());
+  },
+});

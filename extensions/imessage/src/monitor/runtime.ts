@@ -1,11 +1,7 @@
-import { createNonExitingRuntime, type RuntimeEnv } from "../../../../src/runtime.js";
-import { normalizeStringEntries } from "../../../../src/shared/string-normalization.js";
+// Imessage plugin module implements runtime behavior.
+import { createNonExitingRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { MonitorIMessageOpts } from "./types.js";
 
 export function resolveRuntime(opts: MonitorIMessageOpts): RuntimeEnv {
   return opts.runtime ?? createNonExitingRuntime();
-}
-
-export function normalizeAllowList(list?: Array<string | number>) {
-  return normalizeStringEntries(list);
 }

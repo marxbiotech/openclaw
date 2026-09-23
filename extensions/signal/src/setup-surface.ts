@@ -1,125 +1,93 @@
+// Signal plugin module implements setup surface behavior.
 import {
-  parseSetupEntriesAllowingWildcard,
-  promptParsedAllowFromForScopedChannel,
-  setChannelDmPolicyWithAllowFrom,
+  createSetupTranslator,
+  createDetectedBinaryStatus,
   setSetupChannelEnabled,
-} from "../../../src/channels/plugins/setup-wizard-helpers.js";
-import type { ChannelSetupDmPolicy } from "../../../src/channels/plugins/setup-wizard-types.js";
-import { type ChannelSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
-import { formatCliCommand } from "../../../src/cli/command-format.js";
-import { detectBinary } from "../../../src/commands/onboard-helpers.js";
-import { installSignalCli } from "../../../src/commands/signal-install.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
-import { formatDocsLink } from "../../../src/terminal/links.js";
-import type { WizardPrompter } from "../../../src/wizard/prompts.js";
+  type ChannelSetupWizard,
+} from "openclaw/plugin-sdk/setup";
+import { detectBinary } from "openclaw/plugin-sdk/setup-tools";
+import { listSignalAccountIds, resolveSignalAccount } from "./accounts.js";
+import { installSignalCli } from "./install-signal-cli.js";
 import {
-  listSignalAccountIds,
-  resolveDefaultSignalAccountId,
-  resolveSignalAccount,
-} from "./accounts.js";
-import {
-  normalizeSignalAccountInput,
-  parseSignalAllowFromEntries,
-  signalSetupAdapter,
+  createSignalCliPathTextInput,
+  signalCompletionNote,
+  signalDmPolicy,
+  signalNumberTextInput,
 } from "./setup-core.js";
 
+const t = createSetupTranslator();
+
 const channel = "signal" as const;
-const INVALID_SIGNAL_ACCOUNT_ERROR =
-  "Invalid E.164 phone number (must start with + and country code, e.g. +15555550123)";
-
-async function promptSignalAllowFrom(params: {
-  cfg: OpenClawConfig;
-  prompter: WizardPrompter;
-  accountId?: string;
-}): Promise<OpenClawConfig> {
-  return promptParsedAllowFromForScopedChannel({
-    cfg: params.cfg,
-    channel,
-    accountId: params.accountId,
-    defaultAccountId: resolveDefaultSignalAccountId(params.cfg),
-    prompter: params.prompter,
-    noteTitle: "Signal allowlist",
-    noteLines: [
-      "Allowlist Signal DMs by sender id.",
-      "Examples:",
-      "- +15555550123",
-      "- uuid:123e4567-e89b-12d3-a456-426614174000",
-      "Multiple entries: comma-separated.",
-      `Docs: ${formatDocsLink("/signal", "signal")}`,
-    ],
-    message: "Signal allowFrom (E.164 or uuid)",
-    placeholder: "+15555550123, uuid:123e4567-e89b-12d3-a456-426614174000",
-    parseEntries: parseSignalAllowFromEntries,
-    getExistingAllowFrom: ({ cfg, accountId }) =>
-      resolveSignalAccount({ cfg, accountId }).config.allowFrom ?? [],
-  });
-}
-
-const signalDmPolicy: ChannelSetupDmPolicy = {
-  label: "Signal",
-  channel,
-  policyKey: "channels.signal.dmPolicy",
-  allowFromKey: "channels.signal.allowFrom",
-  getCurrent: (cfg) => cfg.channels?.signal?.dmPolicy ?? "pairing",
-  setPolicy: (cfg, policy) =>
-    setChannelDmPolicyWithAllowFrom({
-      cfg,
-      channel,
-      dmPolicy: policy,
-    }),
-  promptAllowFrom: promptSignalAllowFrom,
-};
+const configuredLabel = t("wizard.channels.statusConfigured");
+const unconfiguredLabel = t("wizard.channels.statusNeedsSetup");
+const managedStatus = createDetectedBinaryStatus({
+  channelLabel: "Signal",
+  binaryLabel: "signal-cli",
+  configuredLabel,
+  unconfiguredLabel,
+  configuredHint: t("wizard.channels.statusSignalCliFound"),
+  unconfiguredHint: t("wizard.channels.statusSignalCliMissing"),
+  configuredScore: 1,
+  unconfiguredScore: 0,
+  resolveConfigured: ({ cfg, accountId }) =>
+    accountId
+      ? resolveSignalAccount({ cfg, accountId }).configured
+      : listSignalAccountIds(cfg).some(
+          (resolvedAccountId) =>
+            resolveSignalAccount({ cfg, accountId: resolvedAccountId }).configured,
+        ),
+  resolveBinaryPath: ({ cfg, accountId }) => {
+    const transport = resolveSignalAccount({ cfg, accountId }).transport;
+    return transport.kind === "managed-native" ? transport.cliPath : "signal-cli";
+  },
+  detectBinary,
+});
 
 export const signalSetupWizard: ChannelSetupWizard = {
   channel,
   status: {
-    configuredLabel: "configured",
-    unconfiguredLabel: "needs setup",
-    configuredHint: "signal-cli found",
-    unconfiguredHint: "signal-cli missing",
-    configuredScore: 1,
-    unconfiguredScore: 0,
-    resolveConfigured: ({ cfg }) =>
-      listSignalAccountIds(cfg).some(
-        (accountId) => resolveSignalAccount({ cfg, accountId }).configured,
-      ),
-    resolveStatusLines: async ({ cfg, configured }) => {
-      const signalCliPath = cfg.channels?.signal?.cliPath ?? "signal-cli";
-      const signalCliDetected = await detectBinary(signalCliPath);
-      return [
-        `Signal: ${configured ? "configured" : "needs setup"}`,
-        `signal-cli: ${signalCliDetected ? "found" : "missing"} (${signalCliPath})`,
-      ];
+    ...managedStatus,
+    resolveStatusLines: async (params) => {
+      if (resolveSignalAccount(params).transport.kind === "managed-native") {
+        return (await managedStatus.resolveStatusLines?.(params)) ?? [];
+      }
+      return [`Signal: ${params.configured ? configuredLabel : unconfiguredLabel}`];
     },
-    resolveSelectionHint: async ({ cfg }) => {
-      const signalCliPath = cfg.channels?.signal?.cliPath ?? "signal-cli";
-      return (await detectBinary(signalCliPath)) ? "signal-cli found" : "signal-cli missing";
+    resolveSelectionHint: async (params) => {
+      if (resolveSignalAccount(params).transport.kind === "managed-native") {
+        return await managedStatus.resolveSelectionHint?.(params);
+      }
+      return params.configured ? configuredLabel : unconfiguredLabel;
     },
-    resolveQuickstartScore: async ({ cfg }) => {
-      const signalCliPath = cfg.channels?.signal?.cliPath ?? "signal-cli";
-      return (await detectBinary(signalCliPath)) ? 1 : 0;
+    resolveQuickstartScore: async (params) => {
+      if (resolveSignalAccount(params).transport.kind === "managed-native") {
+        return await managedStatus.resolveQuickstartScore?.(params);
+      }
+      return params.configured ? 1 : 0;
     },
   },
   prepare: async ({ cfg, accountId, credentialValues, runtime, prompter, options }) => {
     if (!options?.allowSignalInstall) {
-      return;
+      return undefined;
+    }
+    const transport = resolveSignalAccount({ cfg, accountId }).transport;
+    if (transport.kind !== "managed-native") {
+      return undefined;
     }
     const currentCliPath =
       (typeof credentialValues.cliPath === "string" ? credentialValues.cliPath : undefined) ??
-      resolveSignalAccount({ cfg, accountId }).config.cliPath ??
+      (transport.kind === "managed-native" ? transport.cliPath : undefined) ??
       "signal-cli";
     const cliDetected = await detectBinary(currentCliPath);
     const wantsInstall = await prompter.confirm({
-      message: cliDetected
-        ? "signal-cli detected. Reinstall/update now?"
-        : "signal-cli not found. Install now?",
+      message: cliDetected ? t("wizard.signal.reinstallPrompt") : t("wizard.signal.installPrompt"),
       initialValue: !cliDetected,
     });
     if (!wantsInstall) {
-      return;
+      return undefined;
     }
     try {
+      await options?.beforePersistentEffect?.();
       const result = await installSignalCli(runtime);
       if (result.ok && result.cliPath) {
         await prompter.note(`Installed signal-cli at ${result.cliPath}`, "Signal");
@@ -135,51 +103,19 @@ export const signalSetupWizard: ChannelSetupWizard = {
     } catch (error) {
       await prompter.note(`signal-cli install failed: ${String(error)}`, "Signal");
     }
+    return undefined;
   },
   credentials: [],
   textInputs: [
-    {
-      inputKey: "cliPath",
-      message: "signal-cli path",
-      currentValue: ({ cfg, accountId, credentialValues }) =>
-        (typeof credentialValues.cliPath === "string" ? credentialValues.cliPath : undefined) ??
-        resolveSignalAccount({ cfg, accountId }).config.cliPath ??
-        "signal-cli",
-      initialValue: ({ cfg, accountId, credentialValues }) =>
-        (typeof credentialValues.cliPath === "string" ? credentialValues.cliPath : undefined) ??
-        resolveSignalAccount({ cfg, accountId }).config.cliPath ??
-        "signal-cli",
-      shouldPrompt: async ({ currentValue }) => !(await detectBinary(currentValue ?? "signal-cli")),
-      confirmCurrentValue: false,
-      applyCurrentValue: true,
-      helpTitle: "Signal",
-      helpLines: [
-        "signal-cli not found. Install it, then rerun this step or set channels.signal.cliPath.",
-      ],
-    },
-    {
-      inputKey: "signalNumber",
-      message: "Signal bot number (E.164)",
-      currentValue: ({ cfg, accountId }) =>
-        normalizeSignalAccountInput(resolveSignalAccount({ cfg, accountId }).config.account) ??
-        undefined,
-      keepPrompt: (value) => `Signal account set (${value}). Keep it?`,
-      validate: ({ value }) =>
-        normalizeSignalAccountInput(value) ? undefined : INVALID_SIGNAL_ACCOUNT_ERROR,
-      normalizeValue: ({ value }) => normalizeSignalAccountInput(value) ?? value,
-    },
+    createSignalCliPathTextInput(async ({ cfg, accountId, currentValue }) => {
+      if (resolveSignalAccount({ cfg, accountId }).transport.kind !== "managed-native") {
+        return false;
+      }
+      return !(await detectBinary(currentValue ?? "signal-cli"));
+    }),
+    signalNumberTextInput,
   ],
-  completionNote: {
-    title: "Signal next steps",
-    lines: [
-      'Link device with: signal-cli link -n "OpenClaw"',
-      "Scan QR in Signal -> Linked Devices",
-      `Then run: ${formatCliCommand("openclaw gateway call channels.status --params '{\"probe\":true}'")}`,
-      `Docs: ${formatDocsLink("/signal", "signal")}`,
-    ],
-  },
+  completionNote: signalCompletionNote,
   dmPolicy: signalDmPolicy,
   disable: (cfg) => setSetupChannelEnabled(cfg, channel, false),
 };
-
-export { normalizeSignalAccountInput, parseSignalAllowFromEntries, signalSetupAdapter };

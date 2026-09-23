@@ -1,20 +1,20 @@
-import { resolveThreadBindingConversationIdFromBindingId } from "../../../src/channels/thread-binding-id.js";
+import { resolveSessionAgentIdStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
+// Feishu plugin module implements thread bindings behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { isPluginOwnedSessionBindingRecord } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import {
   resolveThreadBindingIdleTimeoutMsForChannel,
   resolveThreadBindingMaxAgeMsForChannel,
-} from "../../../src/channels/thread-bindings-policy.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import {
   registerSessionBindingAdapter,
+  resolveThreadBindingConversationIdFromBindingId,
   unregisterSessionBindingAdapter,
   type BindingTargetKind,
+  type SessionBindingAdapter,
   type SessionBindingRecord,
-} from "../../../src/infra/outbound/session-binding-service.js";
-import {
-  normalizeAccountId,
-  resolveAgentIdFromSessionKey,
-} from "../../../src/routing/session-key.js";
-import { resolveGlobalSingleton } from "../../../src/shared/global-singleton.js";
+} from "openclaw/plugin-sdk/conversation-runtime";
+import { isFutureDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
+import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type FeishuBindingTargetKind = "subagent" | "acp";
 
@@ -31,6 +31,7 @@ type FeishuThreadBindingRecord = {
   boundBy?: string;
   boundAt: number;
   lastActivityAt: number;
+  metadata?: Record<string, unknown>;
 };
 
 type FeishuThreadBindingManager = {
@@ -56,16 +57,21 @@ type FeishuThreadBindingsState = {
 };
 
 const FEISHU_THREAD_BINDINGS_STATE_KEY = Symbol.for("openclaw.feishuThreadBindingsState");
-const state = resolveGlobalSingleton<FeishuThreadBindingsState>(
-  FEISHU_THREAD_BINDINGS_STATE_KEY,
-  () => ({
-    managersByAccountId: new Map(),
-    bindingsByAccountConversation: new Map(),
-  }),
-);
+let state: FeishuThreadBindingsState | undefined;
 
-const MANAGERS_BY_ACCOUNT_ID = state.managersByAccountId;
-const BINDINGS_BY_ACCOUNT_CONVERSATION = state.bindingsByAccountConversation;
+function getState(): FeishuThreadBindingsState {
+  if (!state) {
+    const globalStore = globalThis as Record<PropertyKey, unknown>;
+    state = (globalStore[FEISHU_THREAD_BINDINGS_STATE_KEY] as
+      | FeishuThreadBindingsState
+      | undefined) ?? {
+      managersByAccountId: new Map(),
+      bindingsByAccountConversation: new Map(),
+    };
+    globalStore[FEISHU_THREAD_BINDINGS_STATE_KEY] = state;
+  }
+  return state;
+}
 
 function resolveBindingKey(params: { accountId: string; conversationId: string }): string {
   return `${params.accountId}:${params.conversationId}`;
@@ -107,6 +113,7 @@ function toSessionBindingRecord(
     boundAt: record.boundAt,
     expiresAt,
     metadata: {
+      ...record.metadata,
       agentId: record.agentId,
       label: record.label,
       boundBy: record.boundBy,
@@ -124,7 +131,7 @@ export function createFeishuThreadBindingManager(params: {
   cfg: OpenClawConfig;
 }): FeishuThreadBindingManager {
   const accountId = normalizeAccountId(params.accountId);
-  const existing = MANAGERS_BY_ACCOUNT_ID.get(accountId);
+  const existing = getState().managersByAccountId.get(accountId);
   if (existing) {
     return existing;
   }
@@ -139,15 +146,44 @@ export function createFeishuThreadBindingManager(params: {
     channel: "feishu",
     accountId,
   });
+  const bindingTimeouts = { idleTimeoutMs, maxAgeMs };
+
+  const resolveActiveBinding = (
+    record: FeishuThreadBindingRecord | undefined,
+    now = Date.now(),
+  ): FeishuThreadBindingRecord | undefined => {
+    if (!record) {
+      return undefined;
+    }
+    const { expiresAt } = toSessionBindingRecord(record, bindingTimeouts);
+    if (expiresAt === undefined || isFutureDateTimestampMs(expiresAt, { nowMs: now })) {
+      return record;
+    }
+
+    // Expire at the manager boundary so direct subagent reads and SDK adapters agree.
+    getState().bindingsByAccountConversation.delete(
+      resolveBindingKey({ accountId, conversationId: record.conversationId }),
+    );
+    return undefined;
+  };
 
   const manager: FeishuThreadBindingManager = {
     accountId,
     getByConversationId: (conversationId) =>
-      BINDINGS_BY_ACCOUNT_CONVERSATION.get(resolveBindingKey({ accountId, conversationId })),
-    listBySessionKey: (targetSessionKey) =>
-      [...BINDINGS_BY_ACCOUNT_CONVERSATION.values()].filter(
-        (record) => record.accountId === accountId && record.targetSessionKey === targetSessionKey,
+      resolveActiveBinding(
+        getState().bindingsByAccountConversation.get(
+          resolveBindingKey({ accountId, conversationId }),
+        ),
       ),
+    listBySessionKey: (targetSessionKey) => {
+      const now = Date.now();
+      return [...getState().bindingsByAccountConversation.values()].filter(
+        (record) =>
+          record.accountId === accountId &&
+          record.targetSessionKey === targetSessionKey &&
+          resolveActiveBinding(record, now) !== undefined,
+      );
+    },
     bindConversation: ({
       conversationId,
       parentConversationId,
@@ -156,40 +192,51 @@ export function createFeishuThreadBindingManager(params: {
       metadata,
     }) => {
       const normalizedConversationId = conversationId.trim();
-      if (!normalizedConversationId || !targetSessionKey.trim()) {
+      const normalizedTargetSessionKey = targetSessionKey.trim();
+      if (!normalizedConversationId || !normalizedTargetSessionKey) {
         return null;
       }
+      const existingLocal = manager.getByConversationId(normalizedConversationId);
+      const storedTargetKind = toFeishuTargetKind(targetKind);
+      const previous =
+        existingLocal?.targetSessionKey === normalizedTargetSessionKey &&
+        existingLocal.targetKind === storedTargetKind
+          ? existingLocal
+          : undefined;
+      // A plugin's opaque target has no agent owner, including on metadata-omitting refreshes.
+      const targetMetadata = { ...previous?.metadata, ...metadata };
       const now = Date.now();
       const record: FeishuThreadBindingRecord = {
         accountId,
         conversationId: normalizedConversationId,
-        parentConversationId: parentConversationId?.trim() || undefined,
+        parentConversationId:
+          normalizeOptionalString(parentConversationId) ?? existingLocal?.parentConversationId,
         deliveryTo:
           typeof metadata?.deliveryTo === "string" && metadata.deliveryTo.trim()
             ? metadata.deliveryTo.trim()
-            : undefined,
+            : existingLocal?.deliveryTo,
         deliveryThreadId:
           typeof metadata?.deliveryThreadId === "string" && metadata.deliveryThreadId.trim()
             ? metadata.deliveryThreadId.trim()
-            : undefined,
-        targetKind: toFeishuTargetKind(targetKind),
-        targetSessionKey: targetSessionKey.trim(),
+            : existingLocal?.deliveryThreadId,
+        targetKind: storedTargetKind,
+        targetSessionKey: normalizedTargetSessionKey,
         agentId:
-          typeof metadata?.agentId === "string" && metadata.agentId.trim()
-            ? metadata.agentId.trim()
-            : resolveAgentIdFromSessionKey(targetSessionKey),
-        label:
-          typeof metadata?.label === "string" && metadata.label.trim()
-            ? metadata.label.trim()
-            : undefined,
-        boundBy:
-          typeof metadata?.boundBy === "string" && metadata.boundBy.trim()
-            ? metadata.boundBy.trim()
-            : undefined,
+          normalizeOptionalString(metadata?.agentId) ??
+          previous?.agentId ??
+          (isPluginOwnedSessionBindingRecord({ metadata: targetMetadata })
+            ? undefined
+            : resolveSessionAgentIdStrict({
+                config: params.cfg,
+                sessionKey: normalizedTargetSessionKey,
+              })),
+        label: normalizeOptionalString(metadata?.label) ?? previous?.label,
+        boundBy: normalizeOptionalString(metadata?.boundBy) ?? previous?.boundBy,
         boundAt: now,
         lastActivityAt: now,
+        metadata: targetMetadata,
       };
-      BINDINGS_BY_ACCOUNT_CONVERSATION.set(
+      getState().bindingsByAccountConversation.set(
         resolveBindingKey({ accountId, conversationId: normalizedConversationId }),
         record,
       );
@@ -197,30 +244,30 @@ export function createFeishuThreadBindingManager(params: {
     },
     touchConversation: (conversationId, at = Date.now()) => {
       const key = resolveBindingKey({ accountId, conversationId });
-      const existingRecord = BINDINGS_BY_ACCOUNT_CONVERSATION.get(key);
+      const existingRecord = manager.getByConversationId(conversationId);
       if (!existingRecord) {
         return null;
       }
       const updated = { ...existingRecord, lastActivityAt: at };
-      BINDINGS_BY_ACCOUNT_CONVERSATION.set(key, updated);
+      getState().bindingsByAccountConversation.set(key, updated);
       return updated;
     },
     unbindConversation: (conversationId) => {
       const key = resolveBindingKey({ accountId, conversationId });
-      const existingRecord = BINDINGS_BY_ACCOUNT_CONVERSATION.get(key);
+      const existingRecord = getState().bindingsByAccountConversation.get(key);
       if (!existingRecord) {
         return null;
       }
-      BINDINGS_BY_ACCOUNT_CONVERSATION.delete(key);
+      getState().bindingsByAccountConversation.delete(key);
       return existingRecord;
     },
     unbindBySessionKey: (targetSessionKey) => {
       const removed: FeishuThreadBindingRecord[] = [];
-      for (const record of [...BINDINGS_BY_ACCOUNT_CONVERSATION.values()]) {
+      for (const record of getState().bindingsByAccountConversation.values()) {
         if (record.accountId !== accountId || record.targetSessionKey !== targetSessionKey) {
           continue;
         }
-        BINDINGS_BY_ACCOUNT_CONVERSATION.delete(
+        getState().bindingsByAccountConversation.delete(
           resolveBindingKey({ accountId, conversationId: record.conversationId }),
         );
         removed.push(record);
@@ -228,17 +275,24 @@ export function createFeishuThreadBindingManager(params: {
       return removed;
     },
     stop: () => {
-      for (const key of [...BINDINGS_BY_ACCOUNT_CONVERSATION.keys()]) {
-        if (key.startsWith(`${accountId}:`)) {
-          BINDINGS_BY_ACCOUNT_CONVERSATION.delete(key);
+      // A repeated shutdown must not remove a replacement manager's live bindings.
+      if (getState().managersByAccountId.get(accountId) === manager) {
+        for (const key of getState().bindingsByAccountConversation.keys()) {
+          if (key.startsWith(`${accountId}:`)) {
+            getState().bindingsByAccountConversation.delete(key);
+          }
         }
+        getState().managersByAccountId.delete(accountId);
       }
-      MANAGERS_BY_ACCOUNT_ID.delete(accountId);
-      unregisterSessionBindingAdapter({ channel: "feishu", accountId });
+      unregisterSessionBindingAdapter({
+        channel: "feishu",
+        accountId,
+        adapter: sessionBindingAdapter,
+      });
     },
   };
 
-  registerSessionBindingAdapter({
+  const sessionBindingAdapter: SessionBindingAdapter = {
     channel: "feishu",
     accountId,
     capabilities: {
@@ -255,18 +309,18 @@ export function createFeishuThreadBindingManager(params: {
         targetSessionKey: input.targetSessionKey,
         metadata: input.metadata,
       });
-      return bound ? toSessionBindingRecord(bound, { idleTimeoutMs, maxAgeMs }) : null;
+      return bound ? toSessionBindingRecord(bound, bindingTimeouts) : null;
     },
     listBySession: (targetSessionKey) =>
       manager
         .listBySessionKey(targetSessionKey)
-        .map((entry) => toSessionBindingRecord(entry, { idleTimeoutMs, maxAgeMs })),
+        .map((entry) => toSessionBindingRecord(entry, bindingTimeouts)),
     resolveByConversation: (ref) => {
       if (ref.channel !== "feishu") {
         return null;
       }
       const found = manager.getByConversationId(ref.conversationId);
-      return found ? toSessionBindingRecord(found, { idleTimeoutMs, maxAgeMs }) : null;
+      return found ? toSessionBindingRecord(found, bindingTimeouts) : null;
     },
     touch: (bindingId, at) => {
       const conversationId = resolveThreadBindingConversationIdFromBindingId({
@@ -281,7 +335,7 @@ export function createFeishuThreadBindingManager(params: {
       if (input.targetSessionKey?.trim()) {
         return manager
           .unbindBySessionKey(input.targetSessionKey.trim())
-          .map((entry) => toSessionBindingRecord(entry, { idleTimeoutMs, maxAgeMs }));
+          .map((entry) => toSessionBindingRecord(entry, bindingTimeouts));
       }
       const conversationId = resolveThreadBindingConversationIdFromBindingId({
         accountId,
@@ -291,26 +345,18 @@ export function createFeishuThreadBindingManager(params: {
         return [];
       }
       const removed = manager.unbindConversation(conversationId);
-      return removed ? [toSessionBindingRecord(removed, { idleTimeoutMs, maxAgeMs })] : [];
+      return removed ? [toSessionBindingRecord(removed, bindingTimeouts)] : [];
     },
-  });
+  };
 
-  MANAGERS_BY_ACCOUNT_ID.set(accountId, manager);
+  registerSessionBindingAdapter(sessionBindingAdapter);
+
+  getState().managersByAccountId.set(accountId, manager);
   return manager;
 }
 
 export function getFeishuThreadBindingManager(
   accountId?: string,
 ): FeishuThreadBindingManager | null {
-  return MANAGERS_BY_ACCOUNT_ID.get(normalizeAccountId(accountId)) ?? null;
+  return getState().managersByAccountId.get(normalizeAccountId(accountId)) ?? null;
 }
-
-export const __testing = {
-  resetFeishuThreadBindingsForTests() {
-    for (const manager of MANAGERS_BY_ACCOUNT_ID.values()) {
-      manager.stop();
-    }
-    MANAGERS_BY_ACCOUNT_ID.clear();
-    BINDINGS_BY_ACCOUNT_CONVERSATION.clear();
-  },
-};

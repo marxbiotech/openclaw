@@ -1,21 +1,21 @@
-import { danger } from "../../../src/globals.js";
-import { formatErrorMessage } from "../../../src/infra/errors.js";
-import { createSubsystemLogger } from "../../../src/logging/subsystem.js";
-import type { RuntimeEnv } from "../../../src/runtime.js";
+// Telegram plugin module implements api logging behavior.
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 
-export type TelegramApiLogger = (message: string) => void;
+type TelegramApiLogger = (message: string) => void;
 
 type TelegramApiLoggingParams<T> = {
   operation: string;
   fn: () => Promise<T>;
-  runtime?: RuntimeEnv;
+  runtime?: Pick<RuntimeEnv, "error">;
   logger?: TelegramApiLogger;
   shouldLog?: (err: unknown) => boolean;
 };
 
 const fallbackLogger = createSubsystemLogger("telegram/api");
 
-function resolveTelegramApiLogger(runtime?: RuntimeEnv, logger?: TelegramApiLogger) {
+function resolveTelegramApiLogger(runtime?: Pick<RuntimeEnv, "error">, logger?: TelegramApiLogger) {
   if (logger) {
     return logger;
   }
@@ -38,7 +38,7 @@ export async function withTelegramApiErrorLogging<T>({
     if (!shouldLog || shouldLog(err)) {
       const errText = formatErrorMessage(err);
       const log = resolveTelegramApiLogger(runtime, logger);
-      log(danger(`telegram ${operation} failed: ${errText}`));
+      log(`telegram ${operation} failed: ${errText}`);
     }
     throw err;
   }

@@ -1,51 +1,80 @@
+// Tests Docker build cache configuration and dependency cache keys.
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
 const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
+const dockerfilePaths = [
+  "Dockerfile",
+  "scripts/docker/sandbox/Dockerfile",
+  "scripts/docker/sandbox/Dockerfile.browser",
+  "scripts/docker/sandbox/Dockerfile.common",
+  "scripts/docker/cleanup-smoke/Dockerfile",
+  "scripts/docker/install-sh-smoke/Dockerfile",
+  "scripts/docker/install-sh-e2e/Dockerfile",
+  "scripts/docker/install-sh-nonroot/Dockerfile",
+  "scripts/e2e/Dockerfile.qr-import",
+] as const;
+const aptCacheDockerfilePaths = dockerfilePaths.filter(
+  (path) => path !== "scripts/e2e/Dockerfile.qr-import",
+);
+const shellContinuationDockerfilePaths = dockerfilePaths.filter(
+  (path) => path !== "Dockerfile" && path !== "scripts/e2e/Dockerfile.qr-import",
+);
+const repoFileCache = new Map<string, Promise<string>>();
 
 async function readRepoFile(path: string): Promise<string> {
-  return readFile(resolve(repoRoot, path), "utf8");
+  let cached = repoFileCache.get(path);
+  if (!cached) {
+    cached = readFile(resolve(repoRoot, path), "utf8");
+    repoFileCache.set(path, cached);
+  }
+  return cached;
+}
+
+function indexOfPattern(source: string, pattern: RegExp): number {
+  return source.search(pattern);
 }
 
 describe("docker build cache layout", () => {
-  it("keeps the root dependency layer independent from scripts changes", async () => {
+  beforeAll(async () => {
+    await Promise.all(dockerfilePaths.map((path) => readRepoFile(path)));
+  });
+
+  it("keeps both dependency installs independent from the full source copy", async () => {
     const dockerfile = await readRepoFile("Dockerfile");
-    const installIndex = dockerfile.indexOf("pnpm install --frozen-lockfile");
+    const installIndex = dockerfile.lastIndexOf("pnpm install --frozen-lockfile");
     const copyAllIndex = dockerfile.indexOf("COPY . .");
     const scriptsCopyIndex = dockerfile.indexOf("COPY scripts ./scripts");
 
     expect(installIndex).toBeGreaterThan(-1);
     expect(copyAllIndex).toBeGreaterThan(installIndex);
-    expect(scriptsCopyIndex === -1 || scriptsCopyIndex > installIndex).toBe(true);
+    if (scriptsCopyIndex === -1) {
+      expect(scriptsCopyIndex).toBe(-1);
+    } else {
+      expect(scriptsCopyIndex).toBeGreaterThan(installIndex);
+    }
   });
 
   it("uses pnpm cache mounts in Dockerfiles that install repo dependencies", async () => {
     for (const path of [
       "Dockerfile",
-      "scripts/e2e/Dockerfile",
       "scripts/e2e/Dockerfile.qr-import",
       "scripts/docker/cleanup-smoke/Dockerfile",
     ]) {
       const dockerfile = await readRepoFile(path);
-      expect(dockerfile, `${path} should use a shared pnpm store cache`).toContain(
-        "--mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked",
+      expect(
+        dockerfile,
+        `${path} should use a shared pnpm store cache under the active user's home`,
+      ).toMatch(
+        /--mount=type=cache,id=openclaw-pnpm-store,target=\/(?:root|home\/appuser)\/\.local\/share\/pnpm\/store,sharing=locked/,
       );
     }
   });
 
   it("uses apt cache mounts in Dockerfiles that install system packages", async () => {
-    for (const path of [
-      "Dockerfile",
-      "Dockerfile.sandbox",
-      "Dockerfile.sandbox-browser",
-      "Dockerfile.sandbox-common",
-      "scripts/docker/cleanup-smoke/Dockerfile",
-      "scripts/docker/install-sh-smoke/Dockerfile",
-      "scripts/docker/install-sh-e2e/Dockerfile",
-      "scripts/docker/install-sh-nonroot/Dockerfile",
-    ]) {
+    for (const path of aptCacheDockerfilePaths) {
       const dockerfile = await readRepoFile(path);
       expect(dockerfile, `${path} should cache apt package archives`).toContain(
         "target=/var/cache/apt,sharing=locked",
@@ -57,23 +86,30 @@ describe("docker build cache layout", () => {
   });
 
   it("does not leave empty shell continuation lines in sandbox-common", async () => {
-    const dockerfile = await readRepoFile("Dockerfile.sandbox-common");
+    const dockerfile = await readRepoFile("scripts/docker/sandbox/Dockerfile.common");
     expect(dockerfile).not.toContain("apt-get install -y --no-install-recommends ${PACKAGES} \\");
+    expect(dockerfile).toContain("ARG INSTALL_NODE=1");
+    expect(dockerfile).toContain("ARG NODE_MAJOR=24");
+    expect(
+      dockerfile.match(/curl -fsSL --connect-timeout 10 --max-time 120 -o "\$installer"/gu),
+    ).toHaveLength(3);
+    expect(dockerfile.match(/installer="\$\(mktemp\)"/gu)).toHaveLength(3);
+    expect(dockerfile.match(/bash "\$installer" \|\| exit 1/gu)).toHaveLength(2);
+    expect(dockerfile.match(/rm -f "\$installer"/gu)).toHaveLength(3);
+    expect(dockerfile).toContain("apt-get install -y --no-install-recommends nodejs");
+    expect(dockerfile).toContain('ln -sf "${BUN_INSTALL_DIR}/bin/bun"');
+    expect(dockerfile).toMatch(
+      /chmod 0644 "\$installer"; \\\n\s+su - linuxbrew -c "NONINTERACTIVE=1 CI=1 \/bin\/bash '\$installer'" \|\| exit 1/u,
+    );
+    expect(dockerfile).not.toMatch(/curl[^\n]+\|\s*(?:bash|sh)/u);
+    expect(dockerfile).toContain("source=package.json,target=/tmp/openclaw-package.json");
     expect(dockerfile).toContain(
-      'RUN if [ "${INSTALL_PNPM}" = "1" ]; then npm install -g pnpm; fi',
+      'npm install -g "$pnpm_spec" "--allow-scripts=$pnpm_spec" && pnpm --version;',
     );
   });
 
   it("does not leave blank lines after shell continuation markers", async () => {
-    for (const path of [
-      "Dockerfile.sandbox",
-      "Dockerfile.sandbox-browser",
-      "Dockerfile.sandbox-common",
-      "scripts/docker/cleanup-smoke/Dockerfile",
-      "scripts/docker/install-sh-smoke/Dockerfile",
-      "scripts/docker/install-sh-e2e/Dockerfile",
-      "scripts/docker/install-sh-nonroot/Dockerfile",
-    ]) {
+    for (const path of shellContinuationDockerfilePaths) {
       const dockerfile = await readRepoFile(path);
       expect(
         dockerfile,
@@ -82,46 +118,46 @@ describe("docker build cache layout", () => {
     }
   });
 
-  it("copies only install inputs before pnpm install in the e2e image", async () => {
-    const dockerfile = await readRepoFile("scripts/e2e/Dockerfile");
-    const installIndex = dockerfile.indexOf("pnpm install --frozen-lockfile");
-
-    expect(
-      dockerfile.indexOf("COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./"),
-    ).toBeLessThan(installIndex);
-    expect(dockerfile.indexOf("COPY ui/package.json ./ui/package.json")).toBeLessThan(installIndex);
-    expect(
-      dockerfile.indexOf(
-        "COPY extensions/memory-core/package.json ./extensions/memory-core/package.json",
-      ),
-    ).toBeLessThan(installIndex);
-    expect(
-      dockerfile.indexOf(
-        "COPY tsconfig.json tsconfig.plugin-sdk.dts.json tsdown.config.ts vitest.config.ts vitest.e2e.config.ts openclaw.mjs ./",
-      ),
-    ).toBeGreaterThan(installIndex);
-    expect(dockerfile.indexOf("COPY src ./src")).toBeGreaterThan(installIndex);
-    expect(dockerfile.indexOf("COPY test ./test")).toBeGreaterThan(installIndex);
-    expect(dockerfile.indexOf("COPY scripts ./scripts")).toBeGreaterThan(installIndex);
-    expect(dockerfile.indexOf("COPY ui ./ui")).toBeGreaterThan(installIndex);
-  });
-
   it("copies manifests before install in the qr-import image", async () => {
     const dockerfile = await readRepoFile("scripts/e2e/Dockerfile.qr-import");
     const installIndex = dockerfile.indexOf("pnpm install --frozen-lockfile");
 
     expect(
-      dockerfile.indexOf("COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./"),
+      indexOfPattern(
+        dockerfile,
+        /^COPY(?:\s+--chown=\S+)?\s+package\.json pnpm-lock\.yaml pnpm-workspace\.yaml \.\/$/m,
+      ),
     ).toBeLessThan(installIndex);
-    expect(dockerfile.indexOf("COPY ui/package.json ./ui/package.json")).toBeLessThan(installIndex);
-    expect(dockerfile).toContain(
-      "This image only exercises the root qrcode-terminal dependency path.",
-    );
     expect(
-      dockerfile.indexOf(
-        "COPY extensions/memory-core/package.json ./extensions/memory-core/package.json",
+      indexOfPattern(
+        dockerfile,
+        /^COPY(?:\s+--chown=\S+)?\s+ui\/package\.json \.\/ui\/package\.json$/m,
+      ),
+    ).toBeLessThan(installIndex);
+    expect(dockerfile).toContain("This image only exercises the root QR runtime dependency path.");
+    expect(
+      indexOfPattern(
+        dockerfile,
+        /^COPY(?:\s+--chown=\S+)?\s+extensions\/memory-core\/package\.json \.\/extensions\/memory-core\/package\.json$/m,
       ),
     ).toBe(-1);
-    expect(dockerfile.indexOf("COPY . .")).toBeGreaterThan(installIndex);
+    expect(indexOfPattern(dockerfile, /^COPY(?:\s+--chown=\S+)?\s+\.\s+\.$/m)).toBeGreaterThan(
+      installIndex,
+    );
+  });
+
+  it("copies .npmrc before install in the cleanup smoke image", async () => {
+    const dockerfile = await readRepoFile("scripts/docker/cleanup-smoke/Dockerfile");
+    const installIndex = dockerfile.indexOf("pnpm install --frozen-lockfile");
+
+    expect(
+      indexOfPattern(
+        dockerfile,
+        /^COPY(?:\s+--chown=\S+)?\s+package\.json pnpm-lock\.yaml pnpm-workspace\.yaml \.npmrc \.\/$/m,
+      ),
+    ).toBeLessThan(installIndex);
+    expect(indexOfPattern(dockerfile, /^COPY(?:\s+--chown=\S+)?\s+\.\s+\.$/m)).toBeGreaterThan(
+      installIndex,
+    );
   });
 });

@@ -1,1 +1,2 @@
-export { getProxyUrlFromFetch, makeProxyFetch } from "../../../src/infra/net/proxy-fetch.js";
+// Telegram plugin module implements proxy behavior.
+export { getProxyUrlFromFetch, makeProxyFetch } from "openclaw/plugin-sdk/fetch-runtime";

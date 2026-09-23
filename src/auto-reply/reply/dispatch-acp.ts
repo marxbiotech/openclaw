@@ -1,37 +1,147 @@
-import fs from "node:fs/promises";
-import { getAcpSessionManager } from "../../acp/control-plane/manager.js";
-import type { AcpTurnAttachment } from "../../acp/control-plane/manager.types.js";
-import { resolveAcpAgentPolicyError, resolveAcpDispatchPolicyError } from "../../acp/policy.js";
-import { formatAcpRuntimeErrorText } from "../../acp/runtime/error-text.js";
-import { toAcpRuntimeError } from "../../acp/runtime/errors.js";
-import { resolveAcpThreadSessionDetailLines } from "../../acp/runtime/session-identifiers.js";
+// Dispatches reply turns through ACP runtimes and projects their events.
+import { resolveAcpThreadSessionDetailLines } from "@openclaw/acp-core/runtime/session-identifiers";
 import {
   isSessionIdentityPending,
   resolveSessionIdentityFromMeta,
-} from "../../acp/runtime/session-identity.js";
-import { readAcpSessionEntry } from "../../acp/runtime/session-meta.js";
-import type { OpenClawConfig } from "../../config/config.js";
+} from "@openclaw/acp-core/runtime/session-identity";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import type { AcpTurnAttachment } from "../../acp/control-plane/manager.types.js";
+import { resolveAcpAgentPolicyError, resolveAcpDispatchPolicyError } from "../../acp/policy.js";
+import {
+  AcpRuntimeError,
+  formatAcpRuntimeErrorText,
+  toAcpRuntimeError,
+} from "../../acp/runtime/errors.js";
+import {
+  closeAdmittedRunDelegatedAuthority,
+  createOperationalRunInstanceRef,
+  getAdmittedRunDelegatedAuthority,
+  prepareAgentRunAdmission,
+  type AdmittedRunContext,
+} from "../../agents/admitted-run-context.js";
+import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../../agents/agent-run-terminal-outcome.js";
+import {
+  resolveAgentDir,
+  resolveAgentWorkspaceDir,
+  resolveSessionAgentId,
+} from "../../agents/agent-scope.js";
+import { QuestionAnswerUnconfirmedError } from "../../agents/harness/gateway-question-dispatch.js";
+import { claimPendingAgentQuestionAnswer } from "../../agents/harness/gateway-question.js";
+import { toolPolicyRestrictsTools } from "../../agents/tool-policy.js";
+import { recordRuntimeActionDecision } from "../../audit/runtime-action-decision.js";
+import type { ChatType } from "../../channels/chat-type.js";
+import { readChannelContextAdmissionEvidence } from "../../channels/message-access/admission-evidence.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
-import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
+import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
 import { prefixSystemMessage } from "../../infra/system-message.js";
-import { applyMediaUnderstanding } from "../../media-understanding/apply.js";
+import { markDiagnosticSessionProgress } from "../../logging/diagnostic.js";
 import {
-  normalizeAttachmentPath,
-  normalizeAttachments,
-} from "../../media-understanding/attachments.normalize.js";
+  stripExtractedFileImageMetadata,
+  type ExtractedFileImage,
+} from "../../media-understanding/extracted-file-images.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import { maybeApplyTtsToPayload, resolveTtsConfig } from "../../tts/tts.js";
-import {
-  isCommandEnabled,
-  maybeResolveTextAlias,
-  shouldHandleTextCommands,
-} from "../commands-registry.js";
-import type { FinalizedMsgContext } from "../templating.js";
+import { recordAcceptedSessionParticipantInput } from "../../sessions/session-participant-input-recording.js";
+import { prepareChannelParticipantObservation } from "../../sessions/session-participant-input.js";
+import { classifySessionStateActor } from "../../sessions/session-state-events.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { cleanDeferredFinalText, shouldDeferFinalTtsText } from "../../tts/captioned-final.js";
+import { resolveStatusTtsSnapshot } from "../../tts/status-config.js";
+import { resolveConfiguredTtsMode } from "../../tts/tts-config.js";
+import type {
+  GetReplyOptions,
+  ReplyDispatchRun,
+  ReplyDispatchAssistantTranscript,
+  SourceReplyDeliveryMode,
+} from "../get-reply-options.types.js";
+import { markReplyPayloadAsTtsSupplement } from "../reply-payload.js";
+import type { FinalizedRuntimeMsgContext } from "../templating.js";
+import { createLazyAcpElicitationHandler } from "./acp-elicitation-handler-lazy.js";
 import { createAcpReplyProjector } from "./acp-projector.js";
-import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";
-import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
+import {
+  collectDescribedImageAttachmentIndexes,
+  loadAgentTurnMediaRuntime,
+  resolveAgentTurnAttachments,
+  resolveInlineAgentImageAttachments,
+} from "./agent-turn-attachments.js";
+import { consumeChannelRunAdmission } from "./channel-run-admission.js";
+import {
+  createAcpDispatchDeliveryCoordinator,
+  type AcpDispatchDeliveryCoordinator,
+} from "./dispatch-acp-delivery.js";
+import { needsTtsFallback } from "./dispatch-from-config.finalize.js";
+import { appendRecentHistoryImageContext } from "./history-media.js";
+import { hasInboundMediaForUnderstanding } from "./inbound-media.js";
+import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
+
+const dispatchAcpManagerRuntimeLoader = createLazyImportLoader(
+  () => import("./dispatch-acp-manager.runtime.js"),
+);
+const dispatchAcpAuditRuntimeLoader = createLazyImportLoader(
+  () => import("../../agents/command/attempt-execution.runtime.js"),
+);
+
+type OrderedAcpAttachment = {
+  attachment: AcpTurnAttachment;
+  sourceIndex?: number;
+  sequence: number;
+};
+
+function appendOrderedAcpAttachments(params: {
+  entries: OrderedAcpAttachment[];
+  attachments: AcpTurnAttachment[];
+  sourceIndexes?: number[];
+}) {
+  for (const [index, attachment] of params.attachments.entries()) {
+    params.entries.push({
+      attachment,
+      sourceIndex: params.sourceIndexes?.[index],
+      sequence: params.entries.length,
+    });
+  }
+}
+
+function resolveMergedAcpAttachments(entries: OrderedAcpAttachment[]): AcpTurnAttachment[] {
+  return entries
+    .toSorted((left, right) => {
+      if (left.sourceIndex !== undefined && right.sourceIndex !== undefined) {
+        return left.sourceIndex - right.sourceIndex || left.sequence - right.sequence;
+      }
+      return left.sequence - right.sequence;
+    })
+    .map((entry) => entry.attachment);
+}
+const dispatchAcpTtsRuntimeLoader = createLazyImportLoader(
+  () => import("../../tts/tts.runtime.js"),
+);
+const dispatchAcpTranscriptRuntimeLoader = createLazyImportLoader(
+  () => import("./dispatch-acp-transcript.runtime.js"),
+);
+
+function loadDispatchAcpManagerRuntime() {
+  return dispatchAcpManagerRuntimeLoader.load();
+}
+
+function loadDispatchAcpAuditRuntime() {
+  return dispatchAcpAuditRuntimeLoader.load();
+}
+
+function loadDispatchAcpTtsRuntime() {
+  return dispatchAcpTtsRuntimeLoader.load();
+}
+
+function loadDispatchAcpTranscriptRuntime() {
+  return dispatchAcpTranscriptRuntimeLoader.load();
+}
 
 type DispatchProcessedRecorder = (
   outcome: "completed" | "skipped" | "error",
@@ -41,104 +151,17 @@ type DispatchProcessedRecorder = (
   },
 ) => void;
 
-function resolveFirstContextText(
-  ctx: FinalizedMsgContext,
-  keys: Array<"BodyForAgent" | "BodyForCommands" | "CommandBody" | "RawBody" | "Body">,
-): string {
-  for (const key of keys) {
-    const value = ctx[key];
-    if (typeof value === "string") {
-      return value;
-    }
-  }
-  return "";
+function resolveAcpPromptText(ctx: FinalizedRuntimeMsgContext): string {
+  return ctx.agentText.trim();
 }
 
-function resolveAcpPromptText(ctx: FinalizedMsgContext): string {
-  return resolveFirstContextText(ctx, [
-    "BodyForAgent",
-    "BodyForCommands",
-    "CommandBody",
-    "RawBody",
-    "Body",
-  ]).trim();
-}
-
-const ACP_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024;
-
-async function resolveAcpAttachments(ctx: FinalizedMsgContext): Promise<AcpTurnAttachment[]> {
-  const mediaAttachments = normalizeAttachments(ctx);
-  const results: AcpTurnAttachment[] = [];
-  for (const attachment of mediaAttachments) {
-    const mediaType = attachment.mime ?? "application/octet-stream";
-    if (!mediaType.startsWith("image/")) {
-      continue;
-    }
-    const filePath = normalizeAttachmentPath(attachment.path);
-    if (!filePath) {
-      continue;
-    }
-    try {
-      const stat = await fs.stat(filePath);
-      if (stat.size > ACP_ATTACHMENT_MAX_BYTES) {
-        logVerbose(
-          `dispatch-acp: skipping attachment ${filePath} (${stat.size} bytes exceeds ${ACP_ATTACHMENT_MAX_BYTES} byte limit)`,
-        );
-        continue;
-      }
-      const buf = await fs.readFile(filePath);
-      results.push({
-        mediaType,
-        data: buf.toString("base64"),
-      });
-    } catch {
-      // Skip unreadable files. Text content should still be delivered.
-    }
-  }
-  return results;
-}
-
-function resolveCommandCandidateText(ctx: FinalizedMsgContext): string {
-  return resolveFirstContextText(ctx, ["CommandBody", "BodyForCommands", "RawBody", "Body"]).trim();
-}
-
-export function shouldBypassAcpDispatchForCommand(
-  ctx: FinalizedMsgContext,
-  cfg: OpenClawConfig,
-): boolean {
-  const candidate = resolveCommandCandidateText(ctx);
-  if (!candidate) {
-    return false;
-  }
-  const allowTextCommands = shouldHandleTextCommands({
-    cfg,
-    surface: ctx.Surface ?? ctx.Provider ?? "",
-    commandSource: ctx.CommandSource,
-  });
-  if (maybeResolveTextAlias(candidate, cfg) != null) {
-    return allowTextCommands;
-  }
-
-  const normalized = candidate.trim();
-  if (!normalized.startsWith("!")) {
-    return false;
-  }
-
-  if (!ctx.CommandAuthorized) {
-    return false;
-  }
-
-  if (!isCommandEnabled(cfg, "bash")) {
-    return false;
-  }
-
-  return allowTextCommands;
-}
-
-function resolveAcpRequestId(ctx: FinalizedMsgContext): string {
+function resolveAcpRequestId(ctx: FinalizedRuntimeMsgContext): string {
   const id = ctx.MessageSidFull ?? ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
-  if (typeof id === "string" && id.trim()) {
-    return id.trim();
+  if (typeof id === "string") {
+    const normalizedId = normalizeOptionalString(id);
+    if (normalizedId) {
+      return normalizedId;
+    }
   }
   if (typeof id === "number" || typeof id === "bigint") {
     return String(id);
@@ -146,31 +169,52 @@ function resolveAcpRequestId(ctx: FinalizedMsgContext): string {
   return generateSecureUuid();
 }
 
-function hasBoundConversationForSession(params: {
+function resolveAcpTurnText(params: {
+  promptText: string;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+}): string {
+  if (params.sourceReplyDeliveryMode !== "message_tool_only") {
+    return params.promptText;
+  }
+  const guidance = prefixSystemMessage(
+    [
+      "Source channel delivery is private by default for this turn.",
+      "Normal ACP final output will not be automatically posted to the source channel.",
+      "To send visible output, use message(action=send). The target defaults to the current source channel.",
+    ].join(" "),
+  );
+  return params.promptText ? `${guidance}\n\n${params.promptText}` : guidance;
+}
+
+function isRestrictiveRuntimeToolsAllow(toolsAllow: string[] | undefined): boolean {
+  if (toolsAllow === undefined) {
+    return false;
+  }
+  return !toolsAllow.some((entry) => normalizeLowercaseStringOrEmpty(entry) === "*");
+}
+
+async function hasBoundConversationForSession(params: {
+  cfg: OpenClawConfig;
   sessionKey: string;
   channelRaw: string | undefined;
   accountIdRaw: string | undefined;
-}): boolean {
-  const channel = String(params.channelRaw ?? "")
-    .trim()
-    .toLowerCase();
+}): Promise<boolean> {
+  const channel = normalizeOptionalLowercaseString(params.channelRaw) ?? "";
   if (!channel) {
     return false;
   }
-  const accountId = String(params.accountIdRaw ?? "")
-    .trim()
-    .toLowerCase();
-  const normalizedAccountId = accountId || "default";
+  const accountId = normalizeOptionalLowercaseString(params.accountIdRaw) ?? "";
+  const channels = params.cfg.channels as Record<string, { defaultAccount?: unknown } | undefined>;
+  const configuredDefaultAccountId = channels?.[channel]?.defaultAccount;
+  const normalizedAccountId =
+    accountId || normalizeOptionalLowercaseString(configuredDefaultAccountId) || "default";
+  const { getSessionBindingService } = await loadDispatchAcpManagerRuntime();
   const bindingService = getSessionBindingService();
   const bindings = bindingService.listBySession(params.sessionKey);
   return bindings.some((binding) => {
-    const bindingChannel = String(binding.conversation.channel ?? "")
-      .trim()
-      .toLowerCase();
-    const bindingAccountId = String(binding.conversation.accountId ?? "")
-      .trim()
-      .toLowerCase();
-    const conversationId = String(binding.conversation.conversationId ?? "").trim();
+    const bindingChannel = normalizeOptionalLowercaseString(binding.conversation.channel) ?? "";
+    const bindingAccountId = normalizeOptionalLowercaseString(binding.conversation.accountId) ?? "";
+    const conversationId = normalizeOptionalString(binding.conversation.conversationId) ?? "";
     return (
       bindingChannel === channel &&
       (bindingAccountId || "default") === normalizedAccountId &&
@@ -184,108 +228,712 @@ export type AcpDispatchAttemptResult = {
   counts: Record<ReplyDispatchKind, number>;
 };
 
-export async function tryDispatchAcpReply(params: {
-  ctx: FinalizedMsgContext;
-  cfg: OpenClawConfig;
+type AcpDispatchStatsSnapshot = {
+  turns: { queueDepth: number };
+  runtimeCache: { activeSessions: number };
+};
+type AcpDispatchOutcome = { kind: "ok" } | { kind: "error"; error: AcpRuntimeError };
+
+function finishAcpDispatchAttempt(params: {
+  queuedFinal: boolean;
   dispatcher: ReplyDispatcher;
-  sessionKey?: string;
+  delivery: AcpDispatchDeliveryCoordinator;
+  getStats: () => AcpDispatchStatsSnapshot;
+  sessionKey: string;
+  startedAt: number;
+  outcome: AcpDispatchOutcome;
+  recordProcessed: DispatchProcessedRecorder;
+  markIdle: (reason: string) => void;
+}): AcpDispatchAttemptResult {
+  const counts = params.dispatcher.getQueuedCounts();
+  params.delivery.applyRoutedCounts(counts);
+  const hasQueuedDelivery = counts.tool + counts.block + counts.final > 0 || params.queuedFinal;
+  const suppressionReason = hasQueuedDelivery
+    ? undefined
+    : params.delivery.getDeliverySuppressionReason();
+  const acpStats = params.getStats();
+  if (params.outcome.kind === "ok") {
+    logVerbose(
+      `acp-dispatch: session=${params.sessionKey} outcome=ok latencyMs=${Date.now() - params.startedAt} queueDepth=${acpStats.turns.queueDepth} activeRuntimes=${acpStats.runtimeCache.activeSessions}`,
+    );
+    params.recordProcessed("completed", { reason: suppressionReason ?? "acp_dispatch" });
+  } else {
+    logVerbose(
+      `acp-dispatch: session=${params.sessionKey} outcome=error code=${params.outcome.error.code} latencyMs=${Date.now() - params.startedAt} queueDepth=${acpStats.turns.queueDepth} activeRuntimes=${acpStats.runtimeCache.activeSessions}`,
+    );
+    params.recordProcessed("completed", {
+      reason: `acp_error:${normalizeLowercaseStringOrEmpty(params.outcome.error.code)}`,
+    });
+  }
+  params.markIdle("message_completed");
+  return { queuedFinal: params.queuedFinal, counts };
+}
+
+const ACP_STALE_BINDING_UNBIND_REASON = "acp-session-init-failed";
+
+function isStaleSessionInitError(params: { code: string; message: string }): boolean {
+  if (params.code !== "ACP_SESSION_INIT_FAILED") {
+    return false;
+  }
+  return /(ACP (session )?metadata is missing|missing ACP metadata|Session is not ACP-enabled|Resource not found)/i.test(
+    params.message,
+  );
+}
+
+async function maybeUnbindStaleBoundConversations(params: {
+  targetSessionKey: string;
+  error: { code: string; message: string };
+}): Promise<void> {
+  if (!isStaleSessionInitError(params.error)) {
+    return;
+  }
+  try {
+    const { getSessionBindingService } = await loadDispatchAcpManagerRuntime();
+    const removed = await getSessionBindingService().unbind({
+      targetSessionKey: params.targetSessionKey,
+      reason: ACP_STALE_BINDING_UNBIND_REASON,
+    });
+    if (removed.length > 0) {
+      logVerbose(
+        `dispatch-acp: removed ${removed.length} stale bound conversation(s) for ${params.targetSessionKey} after ${params.error.code}: ${params.error.message}`,
+      );
+    }
+  } catch (error) {
+    logVerbose(
+      `dispatch-acp: failed to unbind stale bound conversations for ${params.targetSessionKey}: ${formatErrorMessage(error)}`,
+    );
+  }
+}
+
+async function finalizeAcpTurnOutput(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  agentId: string;
+  delivery: AcpDispatchDeliveryCoordinator;
   inboundAudio: boolean;
   sessionTtsAuto?: TtsAutoMode;
   ttsChannel?: string;
+  ttsAccountId?: string;
+  shouldDeferVisibleTextForTts: boolean;
+  shouldEmitResolvedIdentityNotice: boolean;
+  abortSignal?: AbortSignal;
+}): Promise<boolean> {
+  const ttsMode = resolveConfiguredTtsMode(params.cfg, {
+    agentId: params.agentId,
+    channelId: params.ttsChannel,
+    accountId: params.ttsAccountId,
+  });
+  const accumulatedBlockTtsText = params.delivery.getAccumulatedBlockTtsText();
+  const hasAccumulatedBlockText = accumulatedBlockTtsText.trim().length > 0;
+  const ttsStatus = resolveStatusTtsSnapshot({
+    cfg: params.cfg,
+    sessionAuto: params.sessionTtsAuto,
+    agentId: params.agentId,
+    channelId: params.ttsChannel,
+    accountId: params.ttsAccountId,
+  });
+  const canAttemptFinalTts =
+    ttsStatus != null && !(ttsStatus.autoMode === "inbound" && !params.inboundAudio);
+  const shouldDeferVisibleTextForTts =
+    params.shouldDeferVisibleTextForTts &&
+    ttsMode === "final" &&
+    hasAccumulatedBlockText &&
+    canAttemptFinalTts;
+  const accumulatedVisibleBlockText = shouldDeferVisibleTextForTts
+    ? cleanDeferredFinalText(accumulatedBlockTtsText)
+    : params.delivery.getAccumulatedVisibleBlockText();
+  if (!shouldDeferVisibleTextForTts) {
+    await params.delivery.settleVisibleText();
+  }
+  if (params.abortSignal?.aborted) {
+    return false;
+  }
+  let queuedFinal =
+    params.delivery.hasPendingAnswerDelivery() ||
+    params.delivery.hasPendingFinalTtsMedia() ||
+    (params.delivery.hasDeliveredVisibleText() && !params.delivery.hasFailedVisibleTextDelivery());
+
+  if (
+    ttsMode === "final" &&
+    hasAccumulatedBlockText &&
+    canAttemptFinalTts &&
+    !params.delivery.hasPendingFinalTtsMedia() &&
+    !params.delivery.hasDeliveredFinalTtsMedia()
+  ) {
+    try {
+      const { maybeApplyTtsToPayload } = await loadDispatchAcpTtsRuntime();
+      if (params.abortSignal?.aborted) {
+        return queuedFinal;
+      }
+      const ttsSyntheticReply = await maybeApplyTtsToPayload({
+        payload: { text: accumulatedBlockTtsText },
+        cfg: params.cfg,
+        channel: params.ttsChannel,
+        kind: "final",
+        inboundAudio: params.inboundAudio,
+        ttsAuto: params.sessionTtsAuto,
+        agentId: params.agentId,
+        accountId: params.ttsAccountId,
+      });
+      if (ttsSyntheticReply.mediaUrl) {
+        const finalTtsPayload = markReplyPayloadAsTtsSupplement(
+          shouldDeferVisibleTextForTts
+            ? {
+                ...ttsSyntheticReply,
+                text: accumulatedVisibleBlockText || undefined,
+                trustedLocalMedia: true,
+              }
+            : { ...ttsSyntheticReply, text: undefined, trustedLocalMedia: true },
+          accumulatedBlockTtsText,
+          shouldDeferVisibleTextForTts ? undefined : { visibleTextAlreadyDelivered: true },
+        );
+        const delivered = await params.delivery.deliver("final", finalTtsPayload, {
+          transcriptSource: { kind: "blocks" },
+        });
+        queuedFinal = queuedFinal || delivered;
+      } else if (shouldDeferVisibleTextForTts && ttsSyntheticReply.text?.trim()) {
+        const delivered = await params.delivery.deliver(
+          "final",
+          { text: ttsSyntheticReply.text },
+          { skipTts: true, transcriptSource: { kind: "blocks" } },
+        );
+        queuedFinal = queuedFinal || delivered;
+      } else if (needsTtsFallback(true, accumulatedVisibleBlockText, ttsSyntheticReply.text)) {
+        const delivered = await params.delivery.deliver(
+          "final",
+          { text: ttsSyntheticReply.text },
+          { skipTts: true, transcriptSource: { kind: "blocks" } },
+        );
+        queuedFinal = queuedFinal || delivered;
+      }
+    } catch (err) {
+      logVerbose(`dispatch-acp: accumulated ACP block TTS failed: ${formatErrorMessage(err)}`);
+    }
+  }
+
+  // Some ACP parent surfaces only expose terminal replies, so block routing alone is not enough
+  // to prove the final result was visible to the user.
+  queuedFinal =
+    (await params.delivery.recoverBlockText({ onlyUndelivered: ttsMode === "all" })) || queuedFinal;
+
+  if (params.shouldEmitResolvedIdentityNotice) {
+    const { readAcpSessionEntry } = await loadDispatchAcpManagerRuntime();
+    const currentMeta = readAcpSessionEntry({
+      cfg: params.cfg,
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+    })?.acp;
+    const identityAfterTurn = resolveSessionIdentityFromMeta(currentMeta);
+    if (!isSessionIdentityPending(identityAfterTurn)) {
+      const resolvedDetails = resolveAcpThreadSessionDetailLines({
+        sessionKey: params.sessionKey,
+        meta: currentMeta,
+      });
+      if (resolvedDetails.length > 0) {
+        const delivered = await params.delivery.deliver("final", {
+          text: prefixSystemMessage(["Session ids resolved.", ...resolvedDetails].join("\n")),
+          isStatusNotice: true,
+        });
+        queuedFinal = queuedFinal || delivered;
+      }
+    }
+  }
+
+  return queuedFinal;
+}
+
+export async function tryDispatchAcpReplyCore(params: {
+  ctx: FinalizedRuntimeMsgContext;
+  cfg: OpenClawConfig;
+  dispatcher: ReplyDispatcher;
+  runId?: string;
+  sessionKey?: string;
+  toolsAllow?: string[];
+  images?: Array<{ data: string; mimeType: string }>;
+  extractedFileImages?: ExtractedFileImage[];
+  abortSignal?: AbortSignal;
+  inboundAudio: boolean;
+  sessionTtsAuto?: TtsAutoMode;
+  ttsChannel?: string;
+  suppressUserDelivery?: boolean;
+  suppressReplyLifecycle?: boolean;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   shouldRouteToOriginating: boolean;
   originatingChannel?: string;
   originatingTo?: string;
+  originatingAccountId?: string;
+  originatingThreadId?: string | number;
+  originatingChatType?: ChatType;
   shouldSendToolSummaries: boolean;
+  shouldSendToolSummariesNow?: () => boolean;
+  shouldSendFullToolDetails: boolean;
   bypassForCommand: boolean;
   onReplyStart?: () => Promise<void> | void;
+  onAgentRunStart?: GetReplyOptions["onAgentRunStart"];
+  userTurnTranscriptRecorder?: GetReplyOptions["userTurnTranscriptRecorder"];
+  prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
   recordProcessed: DispatchProcessedRecorder;
   markIdle: (reason: string) => void;
 }): Promise<AcpDispatchAttemptResult | null> {
-  const sessionKey = params.sessionKey?.trim();
+  const sessionKey = normalizeOptionalString(params.sessionKey);
   if (!sessionKey || params.bypassForCommand) {
     return null;
   }
+  prepareChannelParticipantObservation(params.ctx);
 
+  const { getAcpSessionManager } = await loadDispatchAcpManagerRuntime();
   const acpManager = getAcpSessionManager();
   const acpResolution = acpManager.resolveSession({
     cfg: params.cfg,
     sessionKey,
+    agentId: resolveSessionAgentId({
+      config: params.cfg,
+      sessionKey,
+      fallbackAgentId: params.ctx.AgentId,
+    }),
   });
   if (acpResolution.kind === "none") {
     return null;
   }
-
-  let queuedFinal = false;
-  const delivery = createAcpDispatchDeliveryCoordinator({
-    cfg: params.cfg,
-    ctx: params.ctx,
-    dispatcher: params.dispatcher,
-    inboundAudio: params.inboundAudio,
-    sessionTtsAuto: params.sessionTtsAuto,
-    ttsChannel: params.ttsChannel,
-    shouldRouteToOriginating: params.shouldRouteToOriginating,
-    originatingChannel: params.originatingChannel,
-    originatingTo: params.originatingTo,
-    onReplyStart: params.onReplyStart,
-  });
+  const canonicalSessionKey = acpResolution.sessionKey;
+  const transcriptSessionId =
+    acpResolution.kind === "ready" ? acpResolution.entry?.sessionId : undefined;
+  const acpAgentId = acpResolution.agentId;
+  const participantTarget = {
+    agentId: acpAgentId,
+    sessionKey: canonicalSessionKey,
+    storePath: resolveSessionStorePathCore(params.cfg.session?.store, { agentId: acpAgentId }),
+    onError: (error: unknown) =>
+      logVerbose(`dispatch-acp: participant persistence failed: ${formatErrorMessage(error)}`),
+  };
+  const progressSessionKeys = isDiagnosticsEnabled(params.cfg)
+    ? Array.from(
+        new Set(
+          [params.ctx.SessionKey, sessionKey, canonicalSessionKey]
+            .map((key) => normalizeOptionalString(key))
+            .filter((key): key is string => Boolean(key)),
+        ),
+      )
+    : [];
+  const markAcpProgress =
+    progressSessionKeys.length > 0
+      ? () => {
+          for (const key of progressSessionKeys) {
+            markDiagnosticSessionProgress({ sessionKey: key });
+          }
+        }
+      : undefined;
 
   const identityPendingBeforeTurn = isSessionIdentityPending(
     resolveSessionIdentityFromMeta(acpResolution.kind === "ready" ? acpResolution.meta : undefined),
   );
   const shouldEmitResolvedIdentityNotice =
+    !params.suppressUserDelivery &&
     identityPendingBeforeTurn &&
-    (Boolean(params.ctx.MessageThreadId != null && String(params.ctx.MessageThreadId).trim()) ||
-      hasBoundConversationForSession({
-        sessionKey,
+    (Boolean(
+      params.ctx.MessageThreadId != null &&
+      (normalizeOptionalString(String(params.ctx.MessageThreadId)) ?? ""),
+    ) ||
+      (await hasBoundConversationForSession({
+        cfg: params.cfg,
+        sessionKey: canonicalSessionKey,
         channelRaw: params.ctx.OriginatingChannel ?? params.ctx.Surface ?? params.ctx.Provider,
         accountIdRaw: params.ctx.AccountId,
-      }));
+      })));
 
   const resolvedAcpAgent =
     acpResolution.kind === "ready"
-      ? (
-          acpResolution.meta.agent?.trim() ||
-          params.cfg.acp?.defaultAgent?.trim() ||
-          resolveAgentIdFromSessionKey(sessionKey)
-        ).trim()
-      : resolveAgentIdFromSessionKey(sessionKey);
+      ? (normalizeOptionalString(acpResolution.meta.agent) ??
+        normalizeOptionalString(params.cfg.acp?.defaultAgent) ??
+        resolveAgentIdFromSessionKey(canonicalSessionKey))
+      : resolveAgentIdFromSessionKey(canonicalSessionKey);
+  const normalizedDispatchChannel = normalizeOptionalLowercaseString(
+    params.ctx.OriginatingChannel ?? params.ctx.Surface ?? params.ctx.Provider,
+  );
+  const explicitDispatchAccountId = normalizeOptionalString(params.ctx.AccountId);
+  const dispatchChannels = params.cfg.channels as
+    | Record<string, { defaultAccount?: unknown } | undefined>
+    | undefined;
+  const defaultDispatchAccount =
+    normalizedDispatchChannel == null
+      ? undefined
+      : dispatchChannels?.[normalizedDispatchChannel]?.defaultAccount;
+  const effectiveDispatchAccountId =
+    explicitDispatchAccountId ?? normalizeOptionalString(defaultDispatchAccount);
+  const shouldDeferVisibleTextForTts = shouldDeferFinalTtsText({
+    cfg: params.cfg,
+    ttsAuto: params.sessionTtsAuto,
+    agentId: acpAgentId,
+    channelId: params.ttsChannel,
+    accountId: effectiveDispatchAccountId,
+    inboundAudio: params.inboundAudio,
+  });
+  let queuedFinal = false;
+  const delivery = createAcpDispatchDeliveryCoordinator({
+    cfg: params.cfg,
+    agentId: acpAgentId,
+    ctx: params.ctx,
+    dispatcher: params.dispatcher,
+    inboundAudio: params.inboundAudio,
+    sessionKey: canonicalSessionKey,
+    sessionTtsAuto: params.sessionTtsAuto,
+    ttsChannel: params.ttsChannel,
+    suppressUserDelivery: params.suppressUserDelivery,
+    suppressBlockUserDelivery: shouldDeferVisibleTextForTts,
+    suppressReplyLifecycle: params.suppressReplyLifecycle,
+    shouldRouteToOriginating: params.shouldRouteToOriginating,
+    originatingChannel: params.originatingChannel,
+    originatingTo: params.originatingTo,
+    originatingAccountId: params.originatingAccountId,
+    originatingThreadId: params.originatingThreadId,
+    originatingChatType: params.originatingChatType,
+    onReplyStart: params.onReplyStart,
+    abortSignal: params.abortSignal,
+    runId: params.runId,
+  });
+  const pendingAnswerText = resolveAcpPromptText(params.ctx);
+  const inputRecorder = params.userTurnTranscriptRecorder;
+  const assertInputCurrent = () => {
+    params.abortSignal?.throwIfAborted();
+    inputRecorder?.withPendingInput?.(() => {});
+  };
+  const persistInput = inputRecorder
+    ? async () => {
+        assertInputCurrent();
+        await inputRecorder.persistApproved();
+        assertInputCurrent();
+        if (!inputRecorder.hasPersisted()) {
+          throw new Error("ACP input must be durably committed before dispatch.");
+        }
+      }
+    : undefined;
+  try {
+    if (
+      pendingAnswerText &&
+      !params.images?.length &&
+      !params.extractedFileImages?.length &&
+      !hasInboundMediaForUnderstanding(params.ctx) &&
+      (await claimPendingAgentQuestionAnswer({
+        sessionKey: acpResolution.sessionKey,
+        text: pendingAnswerText,
+        sourceRecorder: inputRecorder,
+        authority: { kind: "run", assertCurrent: assertInputCurrent },
+      }))
+    ) {
+      recordAcceptedSessionParticipantInput(params.ctx, participantTarget);
+      const counts = params.dispatcher.getQueuedCounts();
+      params.recordProcessed("completed", { reason: "acp_question_answer" });
+      params.markIdle("message_completed");
+      return { queuedFinal: false, counts };
+    }
+  } catch (error) {
+    if (!(error instanceof QuestionAnswerUnconfirmedError)) {
+      throw error;
+    }
+    // Throwing would make the reply hook fall through and execute the input again.
+    // Record uncertainty without starting another turn or bypassing delivery policy.
+    params.recordProcessed("error", {
+      reason: "acp_question_answer_unconfirmed",
+      error: error.message,
+    });
+    // Delivery failure cannot relinquish custody of possibly committed input.
+    const queuedNotice = await delivery
+      .deliver("final", { text: error.message, isError: true })
+      .catch((deliveryError: unknown) => {
+        logVerbose(
+          `dispatch-acp: uncertain question notice delivery failed: ${formatErrorMessage(deliveryError)}`,
+        );
+        return false;
+      });
+    params.markIdle("message_error");
+    const counts = params.dispatcher.getQueuedCounts();
+    delivery.applyRoutedCounts(counts);
+    return { queuedFinal: queuedNotice, counts };
+  }
+  const deliverDeferredTextFallback = async (): Promise<boolean> =>
+    shouldDeferVisibleTextForTts ? await delivery.recoverBlockText() : false;
   const projector = createAcpReplyProjector({
     cfg: params.cfg,
     shouldSendToolSummaries: params.shouldSendToolSummaries,
+    shouldSendToolSummariesNow: params.shouldSendToolSummariesNow,
+    shouldSendFullToolDetails: params.shouldSendFullToolDetails,
     deliver: delivery.deliver,
+    getConversationContext: () => params.ctx.agentText,
+    onProgress: markAcpProgress,
     provider: params.ctx.Surface ?? params.ctx.Provider,
-    accountId: params.ctx.AccountId,
+    accountId: effectiveDispatchAccountId,
   });
 
   const acpDispatchStartedAt = Date.now();
+  const finishAttempt = (options: { queuedFinal: boolean; outcome: AcpDispatchOutcome }) =>
+    finishAcpDispatchAttempt({
+      ...options,
+      dispatcher: params.dispatcher,
+      delivery,
+      getStats: () => acpManager.getObservabilitySnapshot(),
+      sessionKey,
+      startedAt: acpDispatchStartedAt,
+      recordProcessed: params.recordProcessed,
+      markIdle: params.markIdle,
+    });
+  const requestId = resolveAcpRequestId(params.ctx);
+  const existingRunId = normalizeOptionalString(params.runId);
+  const auditOnly = existingRunId === undefined;
+  let completionSource: ReplyDispatchRun["completionSource"] | undefined;
+  const auditRunId = existingRunId ?? generateSecureUuid();
+  const auditRuntime = await loadDispatchAcpAuditRuntime();
+  const auditToolTracker = auditRuntime.createAcpToolLifecycleTracker();
+  let auditStarted = false;
+  let auditFinished = false;
+  let auditTerminalOutcome: "blocked" | undefined;
+  let auditStopReason: string | undefined;
+  let auditResultStatus: "completed" | "cancelled" | undefined;
+  let runtimeTurnWasCancelled = false;
+  let assistantTranscript: ReplyDispatchAssistantTranscript | undefined;
+  let terminalOutcome: ReturnType<ReplyDispatchRun["getResult"]>["terminalOutcome"];
+  let auditEndFields: ReturnType<typeof auditRuntime.resolveAcpLifecycleEndFields> | undefined;
+  const resolveAuditEndFields = () =>
+    (auditEndFields ??= auditRuntime.resolveAcpLifecycleEndFields(
+      params.abortSignal,
+      auditStopReason,
+      auditResultStatus,
+    ));
+  const emitAuditStart = () => {
+    if (auditStarted) {
+      return;
+    }
+    auditStarted = true;
+    const completionOwner = params.onAgentRunStart?.(auditRunId, undefined, {
+      completionSource: "reply-dispatch",
+      getResult: () => ({ assistantTranscript, terminalOutcome }),
+    });
+    // Observers and channel wrappers also install this callback. Only an explicit
+    // synchronous acknowledgement transfers chat completion away from lifecycle events.
+    completionSource = completionOwner === "reply-dispatch" ? completionOwner : undefined;
+    auditRuntime.emitAcpLifecycleStart({
+      runId: auditRunId,
+      sessionKey: canonicalSessionKey,
+      agentId: acpAgentId,
+      startedAt: Date.now(),
+      auditOnly,
+      completionSource,
+    });
+  };
+  const emitAuditEnd = () => {
+    if (auditFinished) {
+      return;
+    }
+    emitAuditStart();
+    auditFinished = true;
+    terminalOutcome = auditRuntime.emitAcpLifecycleEnd({
+      runId: auditRunId,
+      toolTracker: auditToolTracker,
+      sessionKey: canonicalSessionKey,
+      agentId: acpAgentId,
+      endFields: resolveAuditEndFields(),
+      auditOnly,
+      completionSource,
+    });
+  };
+  const emitAuditError = (error: unknown) => {
+    if (auditFinished) {
+      return;
+    }
+    emitAuditStart();
+    auditFinished = true;
+    terminalOutcome = auditRuntime.emitAcpLifecycleError({
+      runId: auditRunId,
+      toolTracker: auditToolTracker,
+      sessionKey: canonicalSessionKey,
+      agentId: acpAgentId,
+      ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
+      ...(auditTerminalOutcome ? { terminalOutcome: auditTerminalOutcome } : {}),
+      auditOnly,
+      completionSource,
+      error,
+    });
+  };
+  // Hoisted so the failure path can persist the same user turn the success path
+  // records: a bound ACP session must not silently diverge from the channel.
+  let transcriptPromptText = "";
+  // Set once the turn is actually dispatched. Attachment-only turns carry an
+  // empty prompt, so prompt text alone cannot stand in for "a turn happened".
+  let turnDispatched = false;
+  // Exactly one transcript record per turn: a failure after the success write
+  // (e.g. finalization throwing) must not append the same user turn twice.
+  let transcriptPersistenceAttempted = false;
+  const persistTranscript = async (finalText: string): Promise<void> => {
+    if (transcriptPersistenceAttempted) {
+      return;
+    }
+    transcriptPersistenceAttempted = true;
+    // Capture before any persistence await so a later abort cannot rewrite the completed execution.
+    terminalOutcome ??= buildAgentRunTerminalOutcomeFromLifecycleEvent({
+      phase: "end",
+      data: resolveAuditEndFields(),
+    });
+    const { persistAcpDispatchTranscript } = await loadDispatchAcpTranscriptRuntime();
+    assistantTranscript = await persistAcpDispatchTranscript({
+      cfg: params.cfg,
+      sessionKey: canonicalSessionKey,
+      agentId: acpAgentId,
+      expectedSessionId: transcriptSessionId,
+      promptText: transcriptPromptText,
+      finalText,
+      terminalOutcome,
+      meta: acpResolution.kind === "ready" ? acpResolution.meta : undefined,
+      threadId: params.ctx.MessageThreadId,
+      userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
+      prepareAssistantTranscriptMessage: params.prepareAssistantTranscriptMessage,
+      assistantIdempotencyKey: existingRunId,
+    });
+  };
+  let admittedRunContext: AdmittedRunContext | undefined;
+  let nativeActionEvidenceRecorded = false;
+  const recordUnsupportedNativeActionEvidence = () => {
+    if (nativeActionEvidenceRecorded) {
+      return;
+    }
+    nativeActionEvidenceRecorded = true;
+    recordRuntimeActionDecision({
+      token: admittedRunContext?.executionIdentityToken,
+      family: "native-runtime",
+      operation: "action-evidence",
+      outcome: "not-applicable",
+      coverageState: "unsupported",
+      reasonCode: "native_action_callback_unsupported",
+      owner: "acp-runtime",
+      decisionBoundary: "acp-runtime.prompt-submitted",
+      summary:
+        "ACP runtime action evidence is unsupported because the adapter exposes no authoritative native-action callback.",
+      missingEvidence: ["native.action_callback"],
+      remediation: [
+        {
+          code: "instrument_native_action_callback",
+          text: "Instrument an authoritative native-action callback in the ACP adapter before claiming action evidence.",
+        },
+      ],
+    });
+  };
   try {
     const dispatchPolicyError = resolveAcpDispatchPolicyError(params.cfg);
     if (dispatchPolicyError) {
+      auditTerminalOutcome = "blocked";
       throw dispatchPolicyError;
     }
+    if (
+      isRestrictiveRuntimeToolsAllow(params.toolsAllow) ||
+      toolPolicyRestrictsTools(params.ctx.ConversationToolPolicy)
+    ) {
+      auditTerminalOutcome = "blocked";
+      throw new AcpRuntimeError(
+        "ACP_DISPATCH_DISABLED",
+        "This session's bound runtime cannot enforce its permission or tool policy; use an embedded runtime for this restricted conversation.",
+      );
+    }
     if (acpResolution.kind === "stale") {
-      throw acpResolution.error;
+      emitAuditError(acpResolution.error);
+      await maybeUnbindStaleBoundConversations({
+        targetSessionKey: canonicalSessionKey,
+        error: acpResolution.error,
+      });
+      const delivered = await delivery.deliver("final", {
+        text: formatAcpRuntimeErrorText(acpResolution.error),
+        isError: true,
+      });
+      return finishAttempt({
+        queuedFinal: delivered,
+        outcome: { kind: "error", error: acpResolution.error },
+      });
     }
     const agentPolicyError = resolveAcpAgentPolicyError(params.cfg, resolvedAcpAgent);
     if (agentPolicyError) {
+      auditTerminalOutcome = "blocked";
       throw agentPolicyError;
     }
-    if (!params.ctx.MediaUnderstanding?.length) {
+    // Resolve bytes once before understanding so marker accounting shares the same snapshot.
+    const resolvedTurnAttachments = await resolveAgentTurnAttachments({
+      ctx: params.ctx,
+      cfg: params.cfg,
+      includeAttachmentIndexes: true,
+    });
+    let extractedFileImages = params.extractedFileImages ?? [];
+    if (hasInboundMediaForUnderstanding(params.ctx) && !params.ctx.MediaUnderstanding?.length) {
       try {
-        await applyMediaUnderstanding({
+        const { applyMediaUnderstanding } = await loadAgentTurnMediaRuntime();
+        const mediaResult = await applyMediaUnderstanding({
           ctx: params.ctx,
           cfg: params.cfg,
+          deliveredImageIndexes: new Set(resolvedTurnAttachments.attachmentIndexes ?? []),
+          agentId: acpAgentId,
+          agentDir: resolveAgentDir(params.cfg, acpAgentId),
+          workspaceDir: resolveAgentWorkspaceDir(params.cfg, acpAgentId),
         });
+        if (mediaResult.extractedFileImages.length > 0) {
+          extractedFileImages = [...extractedFileImages, ...mediaResult.extractedFileImages];
+        }
       } catch (err) {
         logVerbose(
-          `dispatch-acp: media understanding failed, proceeding with raw content: ${err instanceof Error ? err.message : String(err)}`,
+          `dispatch-acp: media understanding failed, proceeding with raw content: ${formatErrorMessage(err)}`,
         );
       }
     }
 
     const promptText = resolveAcpPromptText(params.ctx);
-    const attachments = await resolveAcpAttachments(params.ctx);
-    if (!promptText && attachments.length === 0) {
+    const describedImageIndexes = collectDescribedImageAttachmentIndexes(params.ctx);
+    const recentHistoryStart =
+      resolvedTurnAttachments.attachments.length -
+      resolvedTurnAttachments.recentHistoryImages.length;
+    const mediaAttachmentEntries = resolvedTurnAttachments.attachments.flatMap(
+      (attachment, index) => {
+        const sourceIndex = resolvedTurnAttachments.attachmentIndexes?.[index];
+        return sourceIndex !== undefined &&
+          !describedImageIndexes.has(sourceIndex) &&
+          (describedImageIndexes.size === 0 || index < recentHistoryStart)
+          ? [{ attachment, sourceIndex }]
+          : [];
+      },
+    );
+    const mediaAttachments = mediaAttachmentEntries.map((entry) => entry.attachment);
+    const recentHistoryImages =
+      describedImageIndexes.size === 0 ? resolvedTurnAttachments.recentHistoryImages : [];
+    const inlineAttachments = resolveInlineAgentImageAttachments(params.images);
+    const extractedAttachments = resolveInlineAgentImageAttachments(
+      extractedFileImages.map(stripExtractedFileImageMetadata),
+    );
+    const useMediaAttachments =
+      mediaAttachments.length > 0 &&
+      !(
+        mediaAttachments.length === recentHistoryImages.length &&
+        (inlineAttachments.length > 0 || extractedAttachments.length > 0)
+      );
+    const attachmentEntries: OrderedAcpAttachment[] = [];
+    if (useMediaAttachments) {
+      appendOrderedAcpAttachments({
+        entries: attachmentEntries,
+        attachments: mediaAttachments,
+        sourceIndexes: mediaAttachmentEntries.map((entry) => entry.sourceIndex),
+      });
+    } else {
+      appendOrderedAcpAttachments({
+        entries: attachmentEntries,
+        attachments: inlineAttachments,
+      });
+    }
+    appendOrderedAcpAttachments({
+      entries: attachmentEntries,
+      attachments: extractedAttachments,
+      sourceIndexes: extractedFileImages.map((image) => image.attachmentIndex),
+    });
+    const attachments = resolveMergedAcpAttachments(attachmentEntries);
+    const turnPromptText = useMediaAttachments
+      ? appendRecentHistoryImageContext({
+          promptText,
+          images: recentHistoryImages,
+        })
+      : promptText;
+    transcriptPromptText = turnPromptText;
+    if (!turnPromptText && attachments.length === 0) {
       const counts = params.dispatcher.getQueuedCounts();
       delivery.applyRoutedCounts(counts);
       params.recordProcessed("completed", { reason: "acp_empty_prompt" });
@@ -293,102 +941,174 @@ export async function tryDispatchAcpReply(params: {
       return { queuedFinal: false, counts };
     }
 
+    emitAuditStart();
     try {
       await delivery.startReplyLifecycle();
     } catch (error) {
-      logVerbose(
-        `dispatch-acp: start reply lifecycle failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      logVerbose(`dispatch-acp: start reply lifecycle failed: ${formatErrorMessage(error)}`);
     }
 
-    await acpManager.runTurn({
+    const channelAdmission = consumeChannelRunAdmission(
+      readChannelContextAdmissionEvidence(params.ctx),
+    );
+    admittedRunContext = await prepareAgentRunAdmission({
       cfg: params.cfg,
-      sessionKey,
-      text: promptText,
+      operationalRunInstance: createOperationalRunInstanceRef(requestId),
+      facts: {
+        runId: requestId,
+        agentId: acpAgentId,
+        ingress: {
+          kind: "acp",
+          boundary: "auto-reply.acp",
+          state: channelAdmission.ingressState,
+        },
+        ...channelAdmission.facts,
+      },
+      onAdmitted: channelAdmission.onAdmitted,
+    }).admit("acp");
+    recordAcceptedSessionParticipantInput(params.ctx, participantTarget);
+    const turnAdmission = admittedRunContext;
+    const elicitationParams = {
+      sourceSessionKey: sessionKey,
+      targetSessionKey: canonicalSessionKey,
+      outerRequestId: requestId,
+      agentId: acpAgentId,
+      runId: auditRunId,
+      delivery,
+      isActive: () =>
+        params.abortSignal?.aborted !== true &&
+        admittedRunContext === turnAdmission &&
+        getAdmittedRunDelegatedAuthority(turnAdmission) !== undefined,
+    };
+    const onElicitation = createLazyAcpElicitationHandler(elicitationParams);
+    // ACP can act before its terminal transcript arrives. Consume accepted input
+    // before submission while leaving final assistant/outcome persistence below.
+    await persistInput?.();
+    assertInputCurrent();
+    if (getAdmittedRunDelegatedAuthority(turnAdmission) === undefined) {
+      throw new Error("ACP turn admission ended before input dispatch.");
+    }
+    turnDispatched = true;
+    await acpManager.runTurn({
+      admittedRunContext,
+      cfg: params.cfg,
+      sessionKey: canonicalSessionKey,
+      agentId: acpAgentId,
+      provenance: classifySessionStateActor({
+        inputProvenance: params.ctx.InputProvenance,
+        sessionEffects: params.ctx.InboundEventKind === "room_event" ? "internal" : "visible",
+      }).actorType,
+      text: resolveAcpTurnText({
+        promptText: turnPromptText,
+        sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+      }),
       attachments: attachments.length > 0 ? attachments : undefined,
       mode: "prompt",
-      requestId: resolveAcpRequestId(params.ctx),
-      onEvent: async (event) => await projector.onEvent(event),
+      requestId,
+      ...(params.abortSignal ? { signal: params.abortSignal } : {}),
+      onElicitation,
+      onLifecycle: recordUnsupportedNativeActionEvidence,
+      onEvent: async (event) => {
+        auditRuntime.emitAcpRuntimeEvent({
+          runId: auditRunId,
+          toolTracker: auditToolTracker,
+          sessionKey: canonicalSessionKey,
+          agentId: acpAgentId,
+          ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
+          auditOnly,
+          event,
+        });
+        if (event.type === "done") {
+          auditStopReason = event.stopReason;
+          auditResultStatus = event.status;
+          runtimeTurnWasCancelled = event.status === "cancelled";
+        }
+        await projector.onEvent(event);
+      },
     });
 
     await projector.flush(true);
-    const ttsMode = resolveTtsConfig(params.cfg).mode ?? "final";
-    const accumulatedBlockText = delivery.getAccumulatedBlockText();
-    if (ttsMode === "final" && delivery.getBlockCount() > 0 && accumulatedBlockText.trim()) {
-      try {
-        const ttsSyntheticReply = await maybeApplyTtsToPayload({
-          payload: { text: accumulatedBlockText },
+    await delivery.flushBlockText();
+    if (!runtimeTurnWasCancelled && !params.abortSignal?.aborted) {
+      queuedFinal =
+        (await finalizeAcpTurnOutput({
           cfg: params.cfg,
-          channel: params.ttsChannel,
-          kind: "final",
+          sessionKey: canonicalSessionKey,
+          agentId: acpAgentId,
+          delivery,
           inboundAudio: params.inboundAudio,
-          ttsAuto: params.sessionTtsAuto,
-        });
-        if (ttsSyntheticReply.mediaUrl) {
-          const delivered = await delivery.deliver("final", {
-            mediaUrl: ttsSyntheticReply.mediaUrl,
-            audioAsVoice: ttsSyntheticReply.audioAsVoice,
-          });
-          queuedFinal = queuedFinal || delivered;
-        }
-      } catch (err) {
-        logVerbose(
-          `dispatch-acp: accumulated ACP block TTS failed: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
+          sessionTtsAuto: params.sessionTtsAuto,
+          ttsChannel: params.ttsChannel,
+          ttsAccountId: effectiveDispatchAccountId,
+          shouldDeferVisibleTextForTts,
+          shouldEmitResolvedIdentityNotice,
+          abortSignal: params.abortSignal,
+        })) || queuedFinal;
+    }
+    // Recheck cancellation after final delivery settles so a late abort keeps
+    // only confirmed output in the cancelled turn's transcript.
+    if (runtimeTurnWasCancelled || params.abortSignal?.aborted) {
+      queuedFinal = (await deliverDeferredTextFallback()) || queuedFinal;
+      await persistTranscript(await delivery.resolveAccumulatedDeliveredTranscriptText());
+      queuedFinal =
+        delivery.hasPendingAnswerDelivery() ||
+        delivery.hasPendingFinalTtsMedia() ||
+        delivery.hasDeliveredFinalReply() ||
+        queuedFinal;
+      const counts = params.dispatcher.getQueuedCounts();
+      delivery.applyRoutedCounts(counts);
+      params.recordProcessed("completed", { reason: "acp_aborted" });
+      params.markIdle("message_aborted");
+      emitAuditEnd();
+      return { queuedFinal, counts };
     }
 
-    if (shouldEmitResolvedIdentityNotice) {
-      const currentMeta = readAcpSessionEntry({
-        cfg: params.cfg,
-        sessionKey,
-      })?.acp;
-      const identityAfterTurn = resolveSessionIdentityFromMeta(currentMeta);
-      if (!isSessionIdentityPending(identityAfterTurn)) {
-        const resolvedDetails = resolveAcpThreadSessionDetailLines({
-          sessionKey,
-          meta: currentMeta,
-        });
-        if (resolvedDetails.length > 0) {
-          const delivered = await delivery.deliver("final", {
-            text: prefixSystemMessage(["Session ids resolved.", ...resolvedDetails].join("\n")),
-          });
-          queuedFinal = queuedFinal || delivered;
-        }
-      }
-    }
+    await persistTranscript(delivery.getAccumulatedTranscriptText());
 
-    const counts = params.dispatcher.getQueuedCounts();
-    delivery.applyRoutedCounts(counts);
-    const acpStats = acpManager.getObservabilitySnapshot(params.cfg);
-    logVerbose(
-      `acp-dispatch: session=${sessionKey} outcome=ok latencyMs=${Date.now() - acpDispatchStartedAt} queueDepth=${acpStats.turns.queueDepth} activeRuntimes=${acpStats.runtimeCache.activeSessions}`,
-    );
-    params.recordProcessed("completed", { reason: "acp_dispatch" });
-    params.markIdle("message_completed");
-    return { queuedFinal, counts };
+    const result = finishAttempt({
+      queuedFinal,
+      outcome: { kind: "ok" },
+    });
+    emitAuditEnd();
+    return result;
   } catch (err) {
-    await projector.flush(true);
     const acpError = toAcpRuntimeError({
       error: err,
       fallbackCode: "ACP_TURN_FAILED",
       fallbackMessage: "ACP turn failed before completion.",
     });
+    emitAuditError(acpError);
+    await projector.flush(true);
+    await delivery.flushBlockText();
+    queuedFinal = (await deliverDeferredTextFallback()) || queuedFinal;
+    await maybeUnbindStaleBoundConversations({
+      targetSessionKey: canonicalSessionKey,
+      error: acpError,
+    });
+    const errorText = formatAcpRuntimeErrorText(acpError);
+    // Snapshot streamed output before delivering the error: delivery accumulates
+    // what it sends, so reading after would fold the error text in twice.
+    const partialText = delivery.getAccumulatedTranscriptText();
     const delivered = await delivery.deliver("final", {
-      text: formatAcpRuntimeErrorText(acpError),
+      text: errorText,
       isError: true,
     });
+    // Record what the channel actually showed. Without this a failed bound turn
+    // leaves the ACP transcript empty while the user sees the reply, and the next
+    // turn resumes from history that never mentions it. Setup failures before
+    // dispatch have no user turn to attach the error to.
+    if (turnDispatched) {
+      await persistTranscript(partialText ? `${partialText}\n\n${errorText}` : errorText);
+    }
     queuedFinal = queuedFinal || delivered;
-    const counts = params.dispatcher.getQueuedCounts();
-    delivery.applyRoutedCounts(counts);
-    const acpStats = acpManager.getObservabilitySnapshot(params.cfg);
-    logVerbose(
-      `acp-dispatch: session=${sessionKey} outcome=error code=${acpError.code} latencyMs=${Date.now() - acpDispatchStartedAt} queueDepth=${acpStats.turns.queueDepth} activeRuntimes=${acpStats.runtimeCache.activeSessions}`,
-    );
-    params.recordProcessed("completed", {
-      reason: `acp_error:${acpError.code.toLowerCase()}`,
+    return finishAttempt({
+      queuedFinal,
+      outcome: { kind: "error", error: acpError },
     });
-    params.markIdle("message_completed");
-    return { queuedFinal, counts };
+  } finally {
+    if (admittedRunContext) {
+      closeAdmittedRunDelegatedAuthority(admittedRunContext);
+    }
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

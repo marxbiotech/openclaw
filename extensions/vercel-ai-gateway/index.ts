@@ -1,37 +1,34 @@
-import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import { buildVercelAiGatewayProvider } from "../../src/agents/models-config.providers.discovery.js";
+// Vercel Ai Gateway plugin entrypoint registers its OpenClaw integration.
+import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
+import { applyVercelAiGatewayConfig, VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF } from "./onboard.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
+import {
+  buildStaticVercelAiGatewayProvider,
+  buildVercelAiGatewayProvider,
+  resolveVercelAiGatewayModel,
+} from "./provider-catalog.js";
+import { resolveVercelAiGatewayThinkingProfile } from "./thinking.js";
 
 const PROVIDER_ID = "vercel-ai-gateway";
 
-const vercelAiGatewayPlugin = {
+export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
   name: "Vercel AI Gateway Provider",
   description: "Bundled Vercel AI Gateway provider plugin",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
-    api.registerProvider({
-      id: PROVIDER_ID,
-      label: "Vercel AI Gateway",
-      docsPath: "/providers/vercel-ai-gateway",
-      envVars: ["AI_GATEWAY_API_KEY"],
-      auth: [],
-      catalog: {
-        order: "simple",
-        run: async (ctx) => {
-          const apiKey = ctx.resolveProviderApiKey(PROVIDER_ID).apiKey;
-          if (!apiKey) {
-            return null;
-          }
-          return {
-            provider: {
-              ...(await buildVercelAiGatewayProvider()),
-              apiKey,
-            },
-          };
-        },
-      },
-    });
+  manifest,
+  provider: {
+    label: "Vercel AI Gateway",
+    docsPath: "/providers/vercel-ai-gateway",
+    manifestAuth: {
+      defaultModel: VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
+      applyConfig: applyVercelAiGatewayConfig,
+    },
+    catalog: {
+      discoveryMode: "strict",
+      buildProvider: () => buildVercelAiGatewayProvider({ discoveryMode: "strict" }),
+      buildStaticProvider: buildStaticVercelAiGatewayProvider,
+    },
+    resolveDynamicModel: ({ modelId }) => resolveVercelAiGatewayModel(modelId),
+    resolveThinkingProfile: ({ modelId }) => resolveVercelAiGatewayThinkingProfile(modelId),
   },
-};
-
-export default vercelAiGatewayPlugin;
+});

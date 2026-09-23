@@ -1,103 +1,86 @@
-import path from "node:path";
+import {
+  createEmptyPluginRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/channel-test-helpers";
+// Telegram tests cover bot native commands plugin behavior.
+import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
+import { listNativeCommandSpecsForConfig } from "openclaw/plugin-sdk/native-command-registry";
+import { clearPluginCommands, registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import { STATE_DIR } from "../../../src/config/paths.js";
-import { TELEGRAM_COMMAND_NAME_PATTERN } from "../../../src/config/telegram-custom-commands.js";
-import type { TelegramAccountConfig } from "../../../src/config/types.js";
-import type { RuntimeEnv } from "../../../src/runtime.js";
-import { registerTelegramNativeCommands } from "./bot-native-commands.js";
+import {
+  createCommandBot,
+  createNativeCommandTestParams,
+  createPrivateCommandContext,
+  listSkillCommandsForAgents,
+  resetNativeCommandMenuMocks,
+  waitForRegisteredCommands,
+} from "./bot-native-commands.menu-test-support.js";
+import { normalizeTelegramCommandName, TELEGRAM_COMMAND_NAME_PATTERN } from "./command-config.js";
 
-const { listSkillCommandsForAgents } = vi.hoisted(() => ({
-  listSkillCommandsForAgents: vi.fn(() => []),
-}));
-const pluginCommandMocks = vi.hoisted(() => ({
-  getPluginCommandSpecs: vi.fn(() => []),
-  matchPluginCommand: vi.fn(() => null),
-  executePluginCommand: vi.fn(async () => ({ text: "ok" })),
-}));
-const deliveryMocks = vi.hoisted(() => ({
-  deliverReplies: vi.fn(async () => ({ delivered: true })),
-}));
+type TelegramInlineKeyboardReplyMarkup = {
+  inline_keyboard?: Array<Array<{ text?: string; callback_data?: string }>>;
+};
 
-vi.mock("../../../src/auto-reply/skill-commands.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../src/auto-reply/skill-commands.js")>();
-  return {
-    ...actual,
-    listSkillCommandsForAgents,
-  };
-});
-vi.mock("../../../src/plugins/commands.js", () => ({
-  getPluginCommandSpecs: pluginCommandMocks.getPluginCommandSpecs,
-  matchPluginCommand: pluginCommandMocks.matchPluginCommand,
-  executePluginCommand: pluginCommandMocks.executePluginCommand,
-}));
-vi.mock("./bot/delivery.js", () => ({
-  deliverReplies: deliveryMocks.deliverReplies,
-}));
+const pluginCommandHandler = vi.fn(async (_ctx: Record<string, unknown>) => ({ text: "ok" }));
+
+function registerTestPluginCommand(params: {
+  name: string;
+  description: string;
+  acceptsArgs?: boolean;
+  command?: Record<string, unknown>;
+  result?: Record<string, unknown>;
+}) {
+  const result = params.result ?? { text: "ok" };
+  expect(
+    registerPluginCommand(`test-${params.name}`, {
+      name: params.name,
+      description: params.description,
+      acceptsArgs: params.acceptsArgs,
+      requireAuth: false,
+      ...params.command,
+      handler: async (ctx) => {
+        await pluginCommandHandler(ctx as unknown as Record<string, unknown>);
+        return result;
+      },
+    }),
+  ).toEqual({ ok: true });
+}
+
+function collectCallbackData(replyMarkup: TelegramInlineKeyboardReplyMarkup | undefined): string[] {
+  const callbackData: string[] = [];
+  for (const row of replyMarkup?.inline_keyboard ?? []) {
+    for (const button of row) {
+      if (button.callback_data) {
+        callbackData.push(button.callback_data);
+      }
+    }
+  }
+  return callbackData;
+}
+
+function firstCall(mock: { mock: { calls: Array<Array<unknown>> } }) {
+  const call = mock.mock.calls.at(0);
+  if (!call) {
+    throw new Error("expected first mock call");
+  }
+  return call;
+}
+
+resetPluginRuntimeStateForTest();
+setActivePluginRegistry(createEmptyPluginRegistry());
+const { registerTelegramNativeCommands } = await import("./bot-native-commands.js");
+registerTelegramNativeCommands(createNativeCommandTestParams({}));
 
 describe("registerTelegramNativeCommands", () => {
-  type RegisteredCommand = {
-    command: string;
-    description: string;
-  };
-
-  async function waitForRegisteredCommands(
-    setMyCommands: ReturnType<typeof vi.fn>,
-  ): Promise<RegisteredCommand[]> {
-    await vi.waitFor(() => {
-      expect(setMyCommands).toHaveBeenCalled();
-    });
-    return setMyCommands.mock.calls[0]?.[0] as RegisteredCommand[];
-  }
-
   beforeEach(() => {
-    listSkillCommandsForAgents.mockClear();
-    listSkillCommandsForAgents.mockReturnValue([]);
-    pluginCommandMocks.getPluginCommandSpecs.mockClear();
-    pluginCommandMocks.getPluginCommandSpecs.mockReturnValue([]);
-    pluginCommandMocks.matchPluginCommand.mockClear();
-    pluginCommandMocks.matchPluginCommand.mockReturnValue(null);
-    pluginCommandMocks.executePluginCommand.mockClear();
-    pluginCommandMocks.executePluginCommand.mockResolvedValue({ text: "ok" });
-    deliveryMocks.deliverReplies.mockClear();
-    deliveryMocks.deliverReplies.mockResolvedValue({ delivered: true });
+    resetNativeCommandMenuMocks();
+    resetPluginRuntimeStateForTest();
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    clearPluginCommands();
+    pluginCommandHandler.mockClear();
   });
-
-  const buildParams = (cfg: OpenClawConfig, accountId = "default") =>
-    ({
-      bot: {
-        api: {
-          setMyCommands: vi.fn().mockResolvedValue(undefined),
-          sendMessage: vi.fn().mockResolvedValue(undefined),
-        },
-        command: vi.fn(),
-      } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
-      cfg,
-      runtime: {} as RuntimeEnv,
-      accountId,
-      telegramCfg: {} as TelegramAccountConfig,
-      allowFrom: [],
-      groupAllowFrom: [],
-      replyToMode: "off",
-      textLimit: 4000,
-      useAccessGroups: false,
-      nativeEnabled: true,
-      nativeSkillsEnabled: true,
-      nativeDisabledExplicit: false,
-      resolveGroupPolicy: () =>
-        ({
-          allowlistEnabled: false,
-          allowed: true,
-        }) as ReturnType<
-          Parameters<typeof registerTelegramNativeCommands>[0]["resolveGroupPolicy"]
-        >,
-      resolveTelegramGroupConfig: () => ({
-        groupConfig: undefined,
-        topicConfig: undefined,
-      }),
-      shouldSkipUpdate: () => false,
-      opts: { token: "token" },
-    }) satisfies Parameters<typeof registerTelegramNativeCommands>[0];
 
   it("scopes skill commands when account binding exists", () => {
     const cfg: OpenClawConfig = {
@@ -112,7 +95,7 @@ describe("registerTelegramNativeCommands", () => {
       ],
     };
 
-    registerTelegramNativeCommands(buildParams(cfg, "bot-a"));
+    registerTelegramNativeCommands(createNativeCommandTestParams(cfg, { accountId: "bot-a" }));
 
     expect(listSkillCommandsForAgents).toHaveBeenCalledWith({
       cfg,
@@ -127,7 +110,7 @@ describe("registerTelegramNativeCommands", () => {
       },
     };
 
-    registerTelegramNativeCommands(buildParams(cfg, "bot-a"));
+    registerTelegramNativeCommands(createNativeCommandTestParams(cfg, { accountId: "bot-a" }));
 
     expect(listSkillCommandsForAgents).toHaveBeenCalledWith({
       cfg,
@@ -135,37 +118,137 @@ describe("registerTelegramNativeCommands", () => {
     });
   });
 
-  it("truncates Telegram command registration to 100 commands", async () => {
-    const cfg: OpenClawConfig = {
-      commands: { native: false },
-    };
-    const customCommands = Array.from({ length: 120 }, (_, index) => ({
-      command: `cmd_${index}`,
-      description: `Command ${index}`,
-    }));
-    const setMyCommands = vi.fn().mockResolvedValue(undefined);
-    const runtimeLog = vi.fn();
+  it("passes skill command description localizations into Telegram menu sync", async () => {
+    const { bot, setMyCommands } = createCommandBot();
+    listSkillCommandsForAgents.mockReturnValue([
+      {
+        name: "demo_skill",
+        skillName: "demo-skill",
+        description: "Demo skill",
+        descriptionLocalizations: { ko: "데모 스킬" },
+      },
+    ]);
 
-    registerTelegramNativeCommands({
-      ...buildParams(cfg),
-      bot: {
-        api: {
-          setMyCommands,
-          sendMessage: vi.fn().mockResolvedValue(undefined),
+    registerTelegramNativeCommands(
+      createNativeCommandTestParams(
+        {
+          commands: { native: true, nativeSkills: true },
+          agents: { list: [{ id: "main", default: true }] },
         },
-        command: vi.fn(),
-      } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
-      runtime: { log: runtimeLog } as unknown as RuntimeEnv,
-      telegramCfg: { customCommands } as TelegramAccountConfig,
-      nativeEnabled: false,
-      nativeSkillsEnabled: false,
-    });
+        { bot },
+      ),
+    );
 
     const registeredCommands = await waitForRegisteredCommands(setMyCommands);
-    expect(registeredCommands).toHaveLength(100);
-    expect(registeredCommands).toEqual(customCommands.slice(0, 100));
+    expect(registeredCommands.find((command) => command.command === "demo_skill")).toMatchObject({
+      command: "demo_skill",
+      description: "Demo skill",
+      descriptionLocalizations: { ko: "데모 스킬" },
+    });
+  });
+
+  it("builds one canonical no-pressure display order without changing descriptions", async () => {
+    const { bot, setMyCommands } = createCommandBot();
+    const skillCommands = [
+      {
+        name: "demo_skill",
+        skillName: "demo-skill",
+        description: "Demo skill unchanged",
+      },
+    ];
+    const cfg: OpenClawConfig = {
+      commands: { native: true, nativeSkills: true },
+      agents: { list: [{ id: "main", default: true }] },
+    };
+    listSkillCommandsForAgents.mockReturnValue(skillCommands);
+    registerTestPluginCommand({ name: "zeta", description: "Zeta unchanged" });
+    registerTestPluginCommand({ name: "alpha", description: "Alpha unchanged" });
+
+    registerTelegramNativeCommands(
+      createNativeCommandTestParams(cfg, {
+        bot,
+        telegramCfg: {
+          customCommands: [
+            { command: "custom_two", description: "Custom two unchanged" },
+            { command: "custom_one", description: "Custom one unchanged" },
+          ],
+        },
+      }),
+    );
+
+    const registered = (await waitForRegisteredCommands(setMyCommands)).map(
+      ({ command, description }) => ({ command, description }),
+    );
+    const native = listNativeCommandSpecsForConfig(cfg, {
+      skillCommands,
+      provider: "telegram",
+      includeBundledChannelFallback: false,
+    }).map((command) => ({
+      command: normalizeTelegramCommandName(command.name),
+      description: command.description,
+      isAlias: command.isAlias,
+    }));
+    expect(registered).toEqual([
+      { command: "custom_two", description: "Custom two unchanged" },
+      { command: "custom_one", description: "Custom one unchanged" },
+      ...native
+        .filter((command) => !command.isAlias)
+        .map(({ isAlias: _isAlias, ...command }) => command),
+      { command: "alpha", description: "Alpha unchanged" },
+      { command: "zeta", description: "Zeta unchanged" },
+      ...native
+        .filter((command) => command.isAlias)
+        .map(({ isAlias: _isAlias, ...command }) => command),
+    ]);
+  });
+
+  it("promotes /skill when direct skills are omitted by local menu pressure", async () => {
+    const { bot, commandHandlers, setMyCommands } = createCommandBot();
+    const runtimeLog = vi.fn();
+    const cfg: OpenClawConfig = {
+      commands: { native: true, nativeSkills: true },
+      agents: { list: [{ id: "main", default: true }] },
+    };
+    const directSkills = Array.from({ length: 3 }, (_, index) => ({
+      name: `demo_skill_${index}`,
+      skillName: `demo-skill-${index}`,
+      description: `Demo skill ${index}`,
+    }));
+    const customCommands = Array.from({ length: 100 }, (_, index) => ({
+      command: `custom_${index}`,
+      description: `Custom ${index}`,
+    }));
+    listSkillCommandsForAgents.mockReturnValue(directSkills);
+
+    registerTelegramNativeCommands(
+      createNativeCommandTestParams(cfg, {
+        bot,
+        runtime: { log: runtimeLog } as unknown as RuntimeEnv,
+        telegramCfg: {
+          customCommands,
+        },
+      }),
+    );
+
+    const registeredCommands = await waitForRegisteredCommands(setMyCommands);
+    const registeredNames = registeredCommands.map(({ command }) => command);
+    expect(registeredNames).toEqual([
+      "skill",
+      ...customCommands.slice(0, 99).map((command) => command.command),
+    ]);
+    expect(registeredCommands.some((entry) => entry.command.startsWith("demo_skill_"))).toBe(false);
+    expect(directSkills.every((command) => commandHandlers.has(command.name))).toBe(true);
     expect(runtimeLog).toHaveBeenCalledWith(
-      "Telegram limits bots to 100 commands. 120 configured; registering first 100. Use channels.telegram.commands.native: false to disable, or reduce plugin/skill/custom commands.",
+      "Telegram menu pressure omitted per-skill commands; removing per-skill commands and keeping /skill.",
+    );
+    const expectedTotalCommands =
+      customCommands.length +
+      listNativeCommandSpecsForConfig(cfg, {
+        provider: "telegram",
+        includeBundledChannelFallback: false,
+      }).length;
+    expect(runtimeLog).toHaveBeenCalledWith(
+      `Telegram limits bots to 100 commands. ${expectedTotalCommands} configured; registering first 100. Use channels.telegram.commands.native: false to disable, or reduce plugin/skill/custom commands.`,
     );
   });
 
@@ -174,7 +257,7 @@ describe("registerTelegramNativeCommands", () => {
     const command = vi.fn();
 
     registerTelegramNativeCommands({
-      ...buildParams({}),
+      ...createNativeCommandTestParams({}),
       bot: {
         api: {
           setMyCommands,
@@ -185,24 +268,38 @@ describe("registerTelegramNativeCommands", () => {
     });
 
     const registeredCommands = await waitForRegisteredCommands(setMyCommands);
-    expect(registeredCommands.some((entry) => entry.command === "export_session")).toBe(true);
-    expect(registeredCommands.some((entry) => entry.command === "export-session")).toBe(false);
+    const registeredCommandNames = registeredCommands.map((entry) => entry.command);
+    expect(registeredCommandNames).toContain("export_session");
+    expect(registeredCommandNames).not.toContain("export-session");
 
     const registeredHandlers = command.mock.calls.map(([name]) => name);
     expect(registeredHandlers).toContain("export_session");
     expect(registeredHandlers).not.toContain("export-session");
   });
 
+  it("resolves plugin commands from one registry-bound runtime", () => {
+    const cfg: OpenClawConfig = {
+      commands: { native: true },
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+        },
+      },
+    };
+
+    registerTestPluginCommand({ name: "plug", description: "Plugin command" });
+    const { bot, commandHandlers } = createCommandBot();
+    registerTelegramNativeCommands(createNativeCommandTestParams(cfg, { bot }));
+    expect(commandHandlers.has("plug")).toBe(true);
+  });
+
   it("registers only Telegram-safe command names across native, custom, and plugin sources", async () => {
     const setMyCommands = vi.fn().mockResolvedValue(undefined);
 
-    pluginCommandMocks.getPluginCommandSpecs.mockReturnValue([
-      { name: "plugin-status", description: "Plugin status" },
-      { name: "plugin@bad", description: "Bad plugin command" },
-    ] as never);
+    registerTestPluginCommand({ name: "plugin-status", description: "Plugin status" });
 
     registerTelegramNativeCommands({
-      ...buildParams({}),
+      ...createNativeCommandTestParams({}),
       bot: {
         api: {
           setMyCommands,
@@ -221,73 +318,61 @@ describe("registerTelegramNativeCommands", () => {
     const registeredCommands = await waitForRegisteredCommands(setMyCommands);
 
     expect(registeredCommands.length).toBeGreaterThan(0);
+    const registeredCommandNames = registeredCommands.map((entry) => entry.command);
     for (const entry of registeredCommands) {
       expect(entry.command.includes("-")).toBe(false);
       expect(TELEGRAM_COMMAND_NAME_PATTERN.test(entry.command)).toBe(true);
     }
 
-    expect(registeredCommands.some((entry) => entry.command === "export_session")).toBe(true);
-    expect(registeredCommands.some((entry) => entry.command === "custom_backup")).toBe(true);
-    expect(registeredCommands.some((entry) => entry.command === "plugin_status")).toBe(true);
-    expect(registeredCommands.some((entry) => entry.command === "plugin-status")).toBe(false);
-    expect(registeredCommands.some((entry) => entry.command === "custom-bad")).toBe(false);
+    expect(registeredCommandNames).toContain("export_session");
+    expect(registeredCommandNames).toContain("custom_backup");
+    expect(registeredCommandNames).toContain("plugin_status");
+    expect(registeredCommandNames).not.toContain("plugin-status");
+    expect(registeredCommandNames).not.toContain("custom-bad");
   });
 
-  it("passes agent-scoped media roots for plugin command replies with media", async () => {
-    const commandHandlers = new Map<string, (ctx: unknown) => Promise<void>>();
-    const sendMessage = vi.fn().mockResolvedValue(undefined);
-    const cfg: OpenClawConfig = {
+  it("prefixes native command menu callback data so callback handlers can preserve native routing", async () => {
+    const { bot, commandHandlers, sendMessage } = createCommandBot();
+    const cfg = {
       agents: {
-        list: [{ id: "main", default: true }, { id: "work" }],
+        defaults: {
+          model: "openai-codex/gpt-5.5",
+          models: {
+            "openai-codex/gpt-5.5": {
+              params: { fastMode: "auto", fastAutoOnSeconds: 30 },
+            },
+          },
+        },
       },
-      bindings: [{ agentId: "work", match: { channel: "telegram", accountId: "default" } }],
-    };
-
-    pluginCommandMocks.getPluginCommandSpecs.mockReturnValue([
-      {
-        name: "plug",
-        description: "Plugin command",
-      },
-    ] as never);
-    pluginCommandMocks.matchPluginCommand.mockReturnValue({
-      command: { key: "plug", requireAuth: false },
-      args: undefined,
-    } as never);
-    pluginCommandMocks.executePluginCommand.mockResolvedValue({
-      text: "with media",
-      mediaUrl: "/tmp/workspace-work/render.png",
-    } as never);
+    } as OpenClawConfig;
 
     registerTelegramNativeCommands({
-      ...buildParams(cfg),
-      bot: {
-        api: {
-          setMyCommands: vi.fn().mockResolvedValue(undefined),
-          sendMessage,
-        },
-        command: vi.fn((name: string, cb: (ctx: unknown) => Promise<void>) => {
-          commandHandlers.set(name, cb);
-        }),
-      } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
+      ...createNativeCommandTestParams(cfg, { bot, allowFrom: [200] }),
     });
 
-    const handler = commandHandlers.get("plug");
-    expect(handler).toBeTruthy();
-    await handler?.({
-      match: "",
-      message: {
-        message_id: 1,
-        date: Math.floor(Date.now() / 1000),
-        chat: { id: 123, type: "private" },
-        from: { id: 456, username: "alice" },
-      },
-    });
+    const handler = commandHandlers.get("fast");
+    if (!handler) {
+      throw new Error("expected fast command handler to be registered");
+    }
+    await handler(createPrivateCommandContext());
 
-    expect(deliveryMocks.deliverReplies).toHaveBeenCalledWith(
-      expect.objectContaining({
-        mediaLocalRoots: expect.arrayContaining([path.join(STATE_DIR, "workspace-work")]),
-      }),
+    const replyMarkup = (firstCall(sendMessage)[2] as { reply_markup?: unknown } | undefined)
+      ?.reply_markup as TelegramInlineKeyboardReplyMarkup | undefined;
+    expect(firstCall(sendMessage)[1]).toContain(
+      "Current fast mode: auto (30 sec) (default: model).\nOptions: on, off, auto (30 sec), default, status.",
     );
-    expect(sendMessage).not.toHaveBeenCalledWith(123, "Command not found.");
+    const callbackData = collectCallbackData(replyMarkup);
+    const labels = (replyMarkup?.inline_keyboard ?? []).flatMap((row) =>
+      row.map((button) => button.text),
+    );
+
+    expect(callbackData).toEqual([
+      "tgcmd:/fast on",
+      "tgcmd:/fast off",
+      "tgcmd:/fast auto",
+      "tgcmd:/fast default",
+      "tgcmd:/fast status",
+    ]);
+    expect(labels).toEqual(["on", "off", "auto (30 sec)", "default", "status"]);
   });
 });

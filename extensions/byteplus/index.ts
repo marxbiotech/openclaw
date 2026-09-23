@@ -1,40 +1,39 @@
-import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import {
-  buildBytePlusCodingProvider,
-  buildBytePlusProvider,
-} from "../../src/agents/models-config.providers.static.js";
+/**
+ * BytePlus provider plugin entrypoint for model and video generation providers.
+ */
+import { buildOpenAICompatibleProviderFamilyCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { readManifestProviderDefaultModelRef } from "openclaw/plugin-sdk/provider-catalog-shared";
+import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
+import { ensureModelAllowlistEntry } from "openclaw/plugin-sdk/provider-onboard";
+import { BYTEPLUS_PROVIDER_CATALOG } from "./models.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
+import { buildBytePlusVideoGenerationProvider } from "./video-generation-provider.js";
 
 const PROVIDER_ID = "byteplus";
+const BYTEPLUS_DEFAULT_MODEL_REF = readManifestProviderDefaultModelRef(manifest, "byteplus-plan")!;
 
-const byteplusPlugin = {
+export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
   name: "BytePlus Provider",
-  description: "Bundled BytePlus provider plugin",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
-    api.registerProvider({
-      id: PROVIDER_ID,
-      label: "BytePlus",
-      docsPath: "/concepts/model-providers#byteplus-international",
-      envVars: ["BYTEPLUS_API_KEY"],
-      auth: [],
-      catalog: {
-        order: "paired",
-        run: async (ctx) => {
-          const apiKey = ctx.resolveProviderApiKey(PROVIDER_ID).apiKey;
-          if (!apiKey) {
-            return null;
-          }
-          return {
-            providers: {
-              byteplus: { ...buildBytePlusProvider(), apiKey },
-              "byteplus-plan": { ...buildBytePlusCodingProvider(), apiKey },
-            },
-          };
-        },
-      },
-    });
+  description: "BytePlus provider plugin",
+  manifest,
+  provider: {
+    label: "BytePlus",
+    docsPath: "/concepts/model-providers#byteplus-international",
+    manifestAuth: {
+      defaultModel: BYTEPLUS_DEFAULT_MODEL_REF,
+      applyConfig: (cfg) =>
+        ensureModelAllowlistEntry({ cfg, modelRef: BYTEPLUS_DEFAULT_MODEL_REF }),
+    },
+    ...buildOpenAICompatibleProviderFamilyCatalog({
+      discoveryMode: "strict",
+      credentialProviderId: PROVIDER_ID,
+      entries: BYTEPLUS_PROVIDER_CATALOG.entries,
+      staticCatalog: BYTEPLUS_PROVIDER_CATALOG.staticCatalog,
+      augmentModelCatalog: BYTEPLUS_PROVIDER_CATALOG.augmentModelCatalog,
+    }),
   },
-};
-
-export default byteplusPlugin;
+  register(api) {
+    api.registerVideoGenerationProvider(buildBytePlusVideoGenerationProvider());
+  },
+});

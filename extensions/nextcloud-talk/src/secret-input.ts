@@ -1,13 +1,2 @@
-import {
-  buildSecretInputSchema,
-  hasConfiguredSecretInput,
-  normalizeResolvedSecretInputString,
-  normalizeSecretInputString,
-} from "openclaw/plugin-sdk/nextcloud-talk";
-
-export {
-  buildSecretInputSchema,
-  hasConfiguredSecretInput,
-  normalizeResolvedSecretInputString,
-  normalizeSecretInputString,
-};
+// Nextcloud Talk plugin module implements secret input behavior.
+export { buildSecretInputSchema } from "openclaw/plugin-sdk/secret-input";

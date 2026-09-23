@@ -1,58 +1,110 @@
-import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import { buildKimiCodingProvider } from "../../src/agents/models-config.providers.static.js";
-import { isRecord } from "../../src/utils.js";
+// Kimi Coding plugin entrypoint registers its OpenClaw integration.
+import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
+import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
+import type { SecretInput } from "openclaw/plugin-sdk/secret-input";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { applyKimiCodeConfig, KIMI_CODING_MODEL_REF } from "./onboard.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
+import { buildKimiCodingProvider, normalizeKimiCodingModelId } from "./provider-catalog.js";
+import { isKimiK3ModelId, resolveThinkingProfile } from "./provider-policy-api.js";
+import { KIMI_REPLAY_POLICY } from "./replay-policy.js";
+import { wrapKimiProviderStream } from "./stream.js";
 
-const PROVIDER_ID = "kimi-coding";
+const PLUGIN_ID = "kimi";
+const PROVIDER_ID = "kimi";
+const PROVIDER_ALIASES = ["kimi-code", "kimi-coding"];
 
-const kimiCodingPlugin = {
-  id: PROVIDER_ID,
-  name: "Kimi Coding Provider",
-  description: "Bundled Kimi Coding provider plugin",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
-    api.registerProvider({
-      id: PROVIDER_ID,
-      label: "Kimi Coding",
-      aliases: ["kimi-code"],
-      docsPath: "/providers/moonshot",
-      envVars: ["KIMI_API_KEY", "KIMICODE_API_KEY"],
-      auth: [],
-      catalog: {
-        order: "simple",
-        run: async (ctx) => {
-          const apiKey = ctx.resolveProviderApiKey(PROVIDER_ID).apiKey;
-          if (!apiKey) {
-            return null;
-          }
-          const explicitProvider = ctx.config.models?.providers?.[PROVIDER_ID];
-          const builtInProvider = buildKimiCodingProvider();
-          const explicitBaseUrl =
-            typeof explicitProvider?.baseUrl === "string" ? explicitProvider.baseUrl.trim() : "";
-          const explicitHeaders = isRecord(explicitProvider?.headers)
-            ? explicitProvider.headers
-            : undefined;
-          return {
-            provider: {
-              ...builtInProvider,
-              ...(explicitBaseUrl ? { baseUrl: explicitBaseUrl } : {}),
-              ...(explicitHeaders
-                ? {
-                    headers: {
-                      ...builtInProvider.headers,
-                      ...explicitHeaders,
-                    },
-                  }
-                : {}),
-              apiKey,
-            },
-          };
-        },
+function findExplicitProviderConfig(
+  providers: Record<string, unknown> | undefined,
+  providerId: string,
+): Record<string, unknown> | undefined {
+  if (!providers) {
+    return undefined;
+  }
+  const normalizedProviderId = normalizeProviderId(providerId);
+  const match = Object.entries(providers).find(
+    ([configuredProviderId]) => normalizeProviderId(configuredProviderId) === normalizedProviderId,
+  );
+  return isRecord(match?.[1]) ? match[1] : undefined;
+}
+export default defineSingleProviderPluginEntry({
+  id: PLUGIN_ID,
+  name: "Kimi Provider",
+  description: "Bundled Kimi provider plugin",
+  manifest,
+  provider: {
+    id: PROVIDER_ID,
+    label: "Kimi",
+    aliases: PROVIDER_ALIASES,
+    docsPath: "/providers/moonshot",
+    envVars: ["KIMI_API_KEY", "KIMICODE_API_KEY"],
+    manifestAuth: {
+      promptMessage: "Enter Kimi API key",
+      defaultModel: KIMI_CODING_MODEL_REF,
+      expectedProviders: ["kimi", "kimi-code", "kimi-coding"],
+      applyConfig: applyKimiCodeConfig,
+      noteMessage: [
+        "Kimi uses a dedicated coding endpoint and API key.",
+        "Get your API key at: https://www.kimi.com/code/console",
+      ].join("\n"),
+      noteTitle: "Kimi",
+    },
+    catalog: {
+      order: "simple",
+      run: async (ctx) => {
+        const apiKey = ctx.resolveProviderApiKey(PROVIDER_ID).apiKey;
+        if (!apiKey) {
+          return null;
+        }
+        const explicitProvider = findExplicitProviderConfig(
+          ctx.config.models?.providers as Record<string, unknown> | undefined,
+          PROVIDER_ID,
+        );
+        const builtInProvider = buildKimiCodingProvider();
+        const explicitBaseUrl = normalizeOptionalString(explicitProvider?.baseUrl) ?? "";
+        const explicitHeaders = isRecord(explicitProvider?.headers)
+          ? (explicitProvider.headers as Record<string, SecretInput>)
+          : undefined;
+        return {
+          provider: {
+            ...builtInProvider,
+            ...(explicitBaseUrl ? { baseUrl: explicitBaseUrl } : {}),
+            ...(explicitHeaders
+              ? {
+                  headers: {
+                    ...builtInProvider.headers,
+                    ...explicitHeaders,
+                  },
+                }
+              : {}),
+            apiKey,
+          },
+        };
       },
-      capabilities: {
-        preserveAnthropicThinkingSignatures: false,
-      },
-    });
+    },
+    classifyFailoverReason: ({ provider, status, errorMessage }) => {
+      if (!provider || status !== 403) {
+        return undefined;
+      }
+      const providerId = normalizeProviderId(provider);
+      if (providerId !== PROVIDER_ID && !PROVIDER_ALIASES.includes(providerId)) {
+        return undefined;
+      }
+      return /\b(?:weekly(?:\s+\(7-day\))?|(?:7|seven)[ -]day)\s+(?:usage\s+)?limit\b/i.test(
+        errorMessage,
+      ) || /\bquota\s+will\s+reset\b/i.test(errorMessage)
+        ? "rate_limit"
+        : undefined;
+    },
+    buildReplayPolicy: () => KIMI_REPLAY_POLICY,
+    normalizeResolvedModel: ({ model }) => {
+      const normalizedId = normalizeKimiCodingModelId(model.id);
+      return normalizedId === model.id ? undefined : { ...model, id: normalizedId };
+    },
+    normalizeModelId: ({ modelId }) => normalizeKimiCodingModelId(modelId),
+    resolveThinkingProfile,
+    wrapSimpleCompletionStreamFn: (ctx) =>
+      isKimiK3ModelId(ctx.modelId) ? wrapKimiProviderStream(ctx) : ctx.streamFn,
+    wrapStreamFn: wrapKimiProviderStream,
   },
-};
-
-export default kimiCodingPlugin;
+});

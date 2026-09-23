@@ -1,20 +1,9 @@
+// Tests public package entrypoint exports and load behavior.
 import fs from "node:fs";
-import { afterEach, describe, expect, it, vi } from "vitest";
-
-const runtimeMocks = vi.hoisted(() => ({
-  runCli: vi.fn(async () => {}),
-}));
-
-vi.mock("./cli/run-main.js", () => ({
-  runCli: runtimeMocks.runCli,
-}));
+import { describe, expect, it, vi } from "vitest";
+import { applyTemplate, runLegacyCliEntry } from "./index.js";
 
 describe("legacy root entry", () => {
-  afterEach(() => {
-    vi.clearAllMocks();
-    vi.resetModules();
-  });
-
   it("routes the package root export to the pure library entry", () => {
     const packageJson = JSON.parse(
       fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"),
@@ -28,19 +17,29 @@ describe("legacy root entry", () => {
   });
 
   it("does not run CLI bootstrap when imported as a library dependency", async () => {
-    const mod = await import("./index.js");
+    const runCli = vi.fn(async () => undefined);
 
-    expect(typeof mod.runLegacyCliEntry).toBe("function");
-    expect(runtimeMocks.runCli).not.toHaveBeenCalled();
+    expect(applyTemplate("Hello {{MessageSid}}", { MessageSid: "operator" })).toBe(
+      "Hello operator",
+    );
+
+    await runLegacyCliEntry(["openclaw", "status"], { runCli });
+    expect(runCli).toHaveBeenCalledWith(["openclaw", "status"], undefined);
   });
 
-  it("delegates legacy direct-entry execution to run-main", async () => {
-    const mod = await import("./index.js");
-    const argv = ["node", "dist/index.js", "status"];
+  it("forwards process-lifetime console routing for executable callers", async () => {
+    const runCli = vi.fn(async () => undefined);
 
-    await mod.runLegacyCliEntry(argv);
+    await runLegacyCliEntry(
+      ["openclaw", "agent", "exec", "inspect", "--json"],
+      { runCli },
+      {
+        retainConsoleRoutingUntilProcessExit: true,
+      },
+    );
 
-    expect(runtimeMocks.runCli).toHaveBeenCalledOnce();
-    expect(runtimeMocks.runCli).toHaveBeenCalledWith(argv);
+    expect(runCli).toHaveBeenCalledWith(["openclaw", "agent", "exec", "inspect", "--json"], {
+      retainConsoleRoutingUntilProcessExit: true,
+    });
   });
 });

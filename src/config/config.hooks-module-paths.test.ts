@@ -1,5 +1,6 @@
+// Covers hook module path config validation.
 import { describe, expect, it } from "vitest";
-import { validateConfigObjectWithPlugins } from "./config.js";
+import { validateConfigObjectWithPlugins } from "./validation.js";
 
 describe("config hooks module paths", () => {
   const expectRejectedIssuePath = (config: Record<string, unknown>, expectedPath: string) => {
@@ -8,13 +9,13 @@ describe("config hooks module paths", () => {
     if (res.ok) {
       throw new Error("expected validation failure");
     }
-    expect(res.issues.some((iss) => iss.path === expectedPath)).toBe(true);
+    expect(res.issues.map((issue) => issue.path)).toContain(expectedPath);
   };
 
   it("rejects absolute hooks.mappings[].transform.module", () => {
     expectRejectedIssuePath(
       {
-        agents: { list: [{ id: "pi" }] },
+        agents: { entries: { openclaw: {} } },
         hooks: {
           mappings: [
             {
@@ -32,7 +33,7 @@ describe("config hooks module paths", () => {
   it("rejects escaping hooks.mappings[].transform.module", () => {
     expectRejectedIssuePath(
       {
-        agents: { list: [{ id: "pi" }] },
+        agents: { entries: { openclaw: {} } },
         hooks: {
           mappings: [
             {
@@ -47,33 +48,57 @@ describe("config hooks module paths", () => {
     );
   });
 
-  it("rejects absolute hooks.internal.handlers[].module", () => {
+  it.each([
+    ["a former handler registration", [{ event: "command:new", module: "hooks/handler.mjs" }]],
+    ["an empty array", []],
+    ["a malformed value", "hooks/handler.mjs"],
+  ])("rejects retired hooks.internal.handlers for %s", (_label, handlers) => {
     expectRejectedIssuePath(
       {
-        agents: { list: [{ id: "pi" }] },
+        agents: { entries: { openclaw: {} } },
         hooks: {
           internal: {
             enabled: true,
-            handlers: [{ event: "command:new", module: "/tmp/handler.mjs" }],
+            handlers,
           },
         },
       },
-      "hooks.internal.handlers.0.module",
+      "hooks.internal",
     );
   });
 
-  it("rejects escaping hooks.internal.handlers[].module", () => {
+  it("accepts hooks.mappings[].channel runtime plugin ids", () => {
+    const res = validateConfigObjectWithPlugins({
+      agents: { entries: { openclaw: {} } },
+      hooks: {
+        mappings: [
+          {
+            match: { path: "custom" },
+            action: "agent",
+            channel: "collabchat",
+            messageTemplate: "hello",
+          },
+        ],
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects blank hooks.mappings[].channel values", () => {
     expectRejectedIssuePath(
       {
-        agents: { list: [{ id: "pi" }] },
+        agents: { entries: { openclaw: {} } },
         hooks: {
-          internal: {
-            enabled: true,
-            handlers: [{ event: "command:new", module: "../handler.mjs" }],
-          },
+          mappings: [
+            {
+              match: { path: "custom" },
+              action: "agent",
+              channel: "   ",
+            },
+          ],
         },
       },
-      "hooks.internal.handlers.0.module",
+      "hooks.mappings.0.channel",
     );
   });
 });

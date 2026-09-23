@@ -1,70 +1,126 @@
-import { chunkTextWithMode, resolveChunkMode } from "../../../../src/auto-reply/chunk.js";
-import type { ReplyPayload } from "../../../../src/auto-reply/types.js";
-import { loadConfig } from "../../../../src/config/config.js";
-import { resolveMarkdownTableMode } from "../../../../src/config/markdown-tables.js";
-import { convertMarkdownTables } from "../../../../src/markdown/tables.js";
-import type { RuntimeEnv } from "../../../../src/runtime.js";
-import type { createIMessageRpcClient } from "../client.js";
+// Imessage plugin module implements deliver behavior.
+import {
+  createAcceptedChannelDeliveryResult,
+  createChannelPartialDeliveryError,
+  isChannelPartialDeliveryError,
+} from "openclaw/plugin-sdk/channel-inbound";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  deliverTextOrMediaReply,
+  resolveSendableOutboundReplyParts,
+} from "openclaw/plugin-sdk/reply-payload";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { sendMessageIMessage } from "../send.js";
+import {
+  chunkTextWithMode,
+  convertMarkdownTables,
+  resolveChunkMode,
+  resolveMarkdownTableMode,
+} from "./deliver.runtime.js";
 import type { SentMessageCache } from "./echo-cache.js";
 import { sanitizeOutboundText } from "./sanitize-outbound.js";
 
-export async function deliverReplies(params: {
-  replies: ReplyPayload[];
+export async function deliverIMessageReply(params: {
+  cfg: OpenClawConfig;
+  payload: ReplyPayload;
   target: string;
-  client: Awaited<ReturnType<typeof createIMessageRpcClient>>;
   accountId?: string;
   runtime: RuntimeEnv;
   maxBytes: number;
   textLimit: number;
   sentMessageCache?: Pick<SentMessageCache, "remember">;
 }) {
-  const { replies, target, client, runtime, maxBytes, textLimit, accountId, sentMessageCache } =
-    params;
+  const { payload, target, runtime, maxBytes, textLimit, accountId, sentMessageCache } = params;
   const scope = `${accountId ?? ""}:${target}`;
-  const cfg = loadConfig();
+  const { cfg } = params;
   const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "imessage",
     accountId,
   });
   const chunkMode = resolveChunkMode(cfg, "imessage", accountId);
-  for (const payload of replies) {
-    const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
-    const rawText = sanitizeOutboundText(payload.text ?? "");
-    const text = convertMarkdownTables(rawText, tableMode);
-    if (!text && mediaList.length === 0) {
-      continue;
+  const rawText = sanitizeOutboundText(payload.text ?? "");
+  const reply = resolveSendableOutboundReplyParts(payload, {
+    text: convertMarkdownTables(rawText, tableMode),
+  });
+  const accepted: Awaited<ReturnType<typeof sendMessageIMessage>>[] = [];
+  const sendAccepted = async (text: string, mediaUrl?: string) => {
+    const sent = await sendMessageIMessage(target, text, {
+      config: cfg,
+      ...(mediaUrl ? { mediaUrl, ...(payload.audioAsVoice ? { audioAsVoice: true } : {}) } : {}),
+      maxBytes,
+      accountId,
+      replyToId: payload.replyToId,
+    });
+    accepted.push(sent);
+    const echoText = sent.echoText ?? (sent.sentText || undefined);
+    sentMessageCache?.remember(scope, {
+      ...(echoText ? { text: echoText } : {}),
+      ...(sent.echoMedia ? { media: sent.echoMedia } : {}),
+      messageId: sent.messageId,
+    });
+  };
+  let delivered: Awaited<ReturnType<typeof deliverTextOrMediaReply>>;
+  try {
+    delivered = await deliverTextOrMediaReply({
+      payload,
+      text: reply.text,
+      chunkText: (value) => chunkTextWithMode(value, textLimit, chunkMode),
+      sendText: sendAccepted,
+      sendMedia: ({ mediaUrl, caption }) => sendAccepted(caption ?? "", mediaUrl),
+    });
+  } catch (error: unknown) {
+    const partial = isChannelPartialDeliveryError(error) ? error.deliveryResult : undefined;
+    if (accepted.length === 0 && partial?.visibleReplySent !== true) {
+      throw error;
     }
-    if (mediaList.length === 0) {
-      sentMessageCache?.remember(scope, { text });
-      for (const chunk of chunkTextWithMode(text, textLimit, chunkMode)) {
-        const sent = await sendMessageIMessage(target, chunk, {
-          maxBytes,
-          client,
-          accountId,
-          replyToId: payload.replyToId,
-        });
-        sentMessageCache?.remember(scope, { text: chunk, messageId: sent.messageId });
-      }
-    } else {
-      let first = true;
-      for (const url of mediaList) {
-        const caption = first ? text : "";
-        first = false;
-        const sent = await sendMessageIMessage(target, caption, {
-          mediaUrl: url,
-          maxBytes,
-          client,
-          accountId,
-          replyToId: payload.replyToId,
-        });
-        sentMessageCache?.remember(scope, {
-          text: caption || undefined,
-          messageId: sent.messageId,
-        });
-      }
-    }
-    runtime.log?.(`imessage: delivered reply to ${target}`);
+    // A native attachment can settle before its caption rejects; preserve every
+    // previously accepted receipt plus that nested provider-visible subset.
+    throw createChannelPartialDeliveryError(
+      error,
+      createAcceptedChannelDeliveryResult({
+        results: accepted.map((result) => ({ receipt: result.receipt })),
+        deliveryResults: partial ? [partial] : [],
+        kind: reply.mediaUrls.length > 0 ? "media" : "text",
+        content: [...accepted.map((result) => result.sentText), partial?.content]
+          .filter(Boolean)
+          .join("\n"),
+      }),
+    );
   }
+  if (delivered === "empty") {
+    return {
+      visibleReplySent: false as const,
+      suppression: { reason: "no_visible_result" as const },
+    };
+  }
+  const deliveryResult = createAcceptedChannelDeliveryResult({
+    results: accepted.map((result) => ({ receipt: result.receipt })),
+    kind: delivered,
+    content: accepted
+      .map((result) => result.sentText)
+      .filter(Boolean)
+      .join("\n"),
+  });
+  runtime.log?.(`imessage: delivered reply to ${target}`);
+  return deliveryResult;
+}
+
+export function createIMessageEchoCachingSend(params: {
+  accountId?: string;
+  sentMessageCache?: Pick<SentMessageCache, "remember">;
+}): typeof sendMessageIMessage {
+  return async (target, text, opts) => {
+    const sanitizedText = sanitizeOutboundText(text);
+    const sent = await sendMessageIMessage(target, sanitizedText, opts);
+    const scope = `${params.accountId ?? opts.accountId ?? ""}:${target}`;
+    const echoText = sent.echoText ?? (sent.sentText || undefined);
+    params.sentMessageCache?.remember(scope, {
+      ...(echoText ? { text: echoText } : {}),
+      ...(sent.echoMedia ? { media: sent.echoMedia } : {}),
+      messageId: sent.messageId,
+    });
+    return sent;
+  };
 }

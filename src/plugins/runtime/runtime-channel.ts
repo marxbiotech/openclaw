@@ -1,59 +1,5 @@
-import { auditDiscordChannelPermissions } from "../../../extensions/discord/src/audit.js";
-import {
-  listDiscordDirectoryGroupsLive,
-  listDiscordDirectoryPeersLive,
-} from "../../../extensions/discord/src/directory-live.js";
-import { monitorDiscordProvider } from "../../../extensions/discord/src/monitor.js";
-import { probeDiscord } from "../../../extensions/discord/src/probe.js";
-import { resolveDiscordChannelAllowlist } from "../../../extensions/discord/src/resolve-channels.js";
-import { resolveDiscordUserAllowlist } from "../../../extensions/discord/src/resolve-users.js";
-import {
-  createThreadDiscord,
-  deleteMessageDiscord,
-  editChannelDiscord,
-  editMessageDiscord,
-  pinMessageDiscord,
-  sendDiscordComponentMessage,
-  sendMessageDiscord,
-  sendPollDiscord,
-  sendTypingDiscord,
-  unpinMessageDiscord,
-} from "../../../extensions/discord/src/send.js";
-import { monitorIMessageProvider } from "../../../extensions/imessage/src/monitor.js";
-import { probeIMessage } from "../../../extensions/imessage/src/probe.js";
-import { sendMessageIMessage } from "../../../extensions/imessage/src/send.js";
-import { monitorSignalProvider } from "../../../extensions/signal/src/index.js";
-import { probeSignal } from "../../../extensions/signal/src/probe.js";
-import { sendMessageSignal } from "../../../extensions/signal/src/send.js";
-import {
-  listSlackDirectoryGroupsLive,
-  listSlackDirectoryPeersLive,
-} from "../../../extensions/slack/src/directory-live.js";
-import { monitorSlackProvider } from "../../../extensions/slack/src/index.js";
-import { probeSlack } from "../../../extensions/slack/src/probe.js";
-import { resolveSlackChannelAllowlist } from "../../../extensions/slack/src/resolve-channels.js";
-import { resolveSlackUserAllowlist } from "../../../extensions/slack/src/resolve-users.js";
-import { sendMessageSlack } from "../../../extensions/slack/src/send.js";
-import {
-  auditTelegramGroupMembership,
-  collectTelegramUnmentionedGroupIds,
-} from "../../../extensions/telegram/src/audit.js";
-import { monitorTelegramProvider } from "../../../extensions/telegram/src/monitor.js";
-import { probeTelegram } from "../../../extensions/telegram/src/probe.js";
-import {
-  deleteMessageTelegram,
-  editMessageReplyMarkupTelegram,
-  editMessageTelegram,
-  pinMessageTelegram,
-  renameForumTopicTelegram,
-  sendMessageTelegram,
-  sendPollTelegram,
-  sendTypingTelegram,
-  unpinMessageTelegram,
-} from "../../../extensions/telegram/src/send.js";
-import { resolveTelegramToken } from "../../../extensions/telegram/src/token.js";
+import { convertMarkdownTables } from "../../../packages/markdown-core/src/tables.js";
 import { resolveEffectiveMessagesConfig, resolveHumanDelayConfig } from "../../agents/identity.js";
-import { handleSlackAction } from "../../agents/tools/slack-actions.js";
 import {
   chunkByNewline,
   chunkMarkdownText,
@@ -69,78 +15,122 @@ import {
   shouldComputeCommandAuthorized,
 } from "../../auto-reply/command-detection.js";
 import { shouldHandleTextCommands } from "../../auto-reply/commands-registry.js";
-import { withReplyDispatcher } from "../../auto-reply/dispatch.js";
 import {
-  formatAgentEnvelope,
-  formatInboundEnvelope,
-  resolveEnvelopeFormatOptions,
-} from "../../auto-reply/envelope.js";
+  settleReplyDispatcher,
+  withReplyDispatcher,
+} from "../../auto-reply/dispatch-dispatcher.js";
+import { formatAgentEnvelope, resolveEnvelopeFormatOptions } from "../../auto-reply/envelope.js";
 import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
 } from "../../auto-reply/inbound-debounce.js";
-import { dispatchReplyFromConfig } from "../../auto-reply/reply/dispatch-from-config.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import {
   buildMentionRegexes,
   matchesMentionPatterns,
   matchesMentionWithExplicit,
 } from "../../auto-reply/reply/mentions.js";
-import { dispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.js";
 import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.js";
-import { removeAckReactionAfterReply, shouldAckReaction } from "../../channels/ack-reactions.js";
+import {
+  createAckReactionHandle,
+  removeAckReactionAfterReply,
+  removeAckReactionHandleAfterReply,
+  shouldAckReaction,
+} from "../../channels/ack-reactions.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
-import { discordMessageActions } from "../../channels/plugins/actions/discord.js";
-import { signalMessageActions } from "../../channels/plugins/actions/signal.js";
-import { telegramMessageActions } from "../../channels/plugins/actions/telegram.js";
+import { buildChannelInboundEventContext } from "../../channels/inbound-event/context.js";
+import {
+  implicitMentionKindWhen,
+  resolveInboundMentionDecision,
+} from "../../channels/mention-gating.js";
+import {
+  setChannelConversationBindingIdleTimeoutBySessionKey,
+  setChannelConversationBindingMaxAgeBySessionKey,
+} from "../../channels/plugins/conversation-bindings.js";
+import { loadChannelOutboundAdapter } from "../../channels/plugins/outbound/load.js";
 import { recordInboundSession } from "../../channels/session.js";
 import {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
 } from "../../config/group-policy.js";
 import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
+import { resolveSessionStorePathCore } from "../../config/sessions.js";
+import { resolveSessionEntryResetFreshness } from "../../config/sessions/entry-freshness.js";
 import {
-  readSessionUpdatedAt,
-  recordSessionMetaFromInbound,
-  resolveStorePath,
-  updateLastRoute,
-} from "../../config/sessions.js";
+  readSessionUpdatedAtCore,
+  recordInboundSessionMeta,
+  updateSessionLastRoute,
+} from "../../config/sessions/session-accessor.js";
 import { getChannelActivity, recordChannelActivity } from "../../infra/channel-activity.js";
-import {
-  listLineAccountIds,
-  normalizeAccountId as normalizeLineAccountId,
-  resolveDefaultLineAccountId,
-  resolveLineAccount,
-} from "../../line/accounts.js";
-import { monitorLineProvider } from "../../line/monitor.js";
-import { probeLineBot } from "../../line/probe.js";
-import {
-  createQuickReplyItems,
-  pushFlexMessage,
-  pushLocationMessage,
-  pushMessageLine,
-  pushMessagesLine,
-  pushTemplateMessage,
-  pushTextMessageWithQuickReplies,
-  sendMessageLine,
-} from "../../line/send.js";
-import { buildTemplateMessageFromPayload } from "../../line/template-messages.js";
-import { convertMarkdownTables } from "../../markdown/tables.js";
-import { fetchRemoteMedia } from "../../media/fetch.js";
+import { readRemoteMediaBuffer, saveRemoteMedia, saveResponseMedia } from "../../media/fetch.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
 import {
   readChannelAllowFromStore,
+  removeChannelAllowFromStoreEntry,
   upsertChannelPairingRequest,
 } from "../../pairing/pairing-store.js";
 import { buildAgentSessionKey, resolveAgentRoute } from "../../routing/resolve-route.js";
-import { createDiscordTypingLease } from "./runtime-discord-typing.js";
-import { createTelegramTypingLease } from "./runtime-telegram-typing.js";
-import { createRuntimeWhatsApp } from "./runtime-whatsapp.js";
+import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
+import { createChannelRuntimeContextRegistry } from "./channel-runtime-contexts.js";
 import type { PluginRuntime } from "./types.js";
 
-export function createRuntimeChannel(): PluginRuntime["channel"] {
-  return {
+// Text and registration helpers must not initialize the agent dispatch graph.
+const dispatchLowLevelChannelReplyFromConfig = createLazyRuntimeMethod(
+  createLazyRuntimeModule(() => import("../../auto-reply/reply/dispatch-from-config.js")),
+  (runtime) => runtime.dispatchLowLevelChannelReplyFromConfig,
+);
+const dispatchReplyWithBufferedBlockDispatcherCore = createLazyRuntimeMethod(
+  createLazyRuntimeModule(() => import("../../auto-reply/reply/provider-dispatcher.js")),
+  (runtime) => runtime.dispatchReplyWithBufferedBlockDispatcherCore,
+);
+const loadChannelTurnLifecycle = createLazyRuntimeModule(
+  () => import("../../channels/turn/lifecycle.js"),
+);
+const dispatchAssembledChannelTurn = createLazyRuntimeMethod(
+  loadChannelTurnLifecycle,
+  (runtime) => runtime.dispatchAssembledChannelTurn,
+);
+const loadPreparedChannelTurn = createLazyRuntimeModule(
+  () => import("../../channels/turn/execution.js"),
+);
+const runPreparedChannelTurn: PluginRuntime["channel"]["inbound"]["runPreparedReply"] = async (
+  params,
+) => (await loadPreparedChannelTurn()).runPreparedChannelTurn(params);
+const runChannelTurn = createLazyRuntimeMethod(
+  createLazyRuntimeModule(() => import("../../channels/turn/run-channel-turn.js")),
+  (runtime) => runtime.runChannelTurn,
+  // SAFETY: Forwarding async overloads unchanged preserves the raw-event and dispatch-result generics.
+) as PluginRuntime["channel"]["inbound"]["run"];
+
+export function createRuntimeChannel(options?: {
+  dispatchReplyFromConfig?: PluginRuntime["channel"]["reply"]["dispatchReplyFromConfig"];
+}): PluginRuntime["channel"] {
+  const dispatchInbound: PluginRuntime["channel"]["inbound"]["dispatch"] = async (params) =>
+    (await loadChannelTurnLifecycle()).dispatchRoutedChannelTurn({
+      ...params,
+      ...(options?.dispatchReplyFromConfig
+        ? { dispatchReplyFromConfig: options.dispatchReplyFromConfig }
+        : {}),
+    });
+  const inboundRuntime = {
+    buildContext: buildChannelInboundEventContext,
+    run: runChannelTurn,
+    runPreparedReply: runPreparedChannelTurn,
+    dispatch: dispatchInbound,
+    dispatchReply: dispatchAssembledChannelTurn,
+  } satisfies PluginRuntime["channel"]["inbound"];
+  const sessionRuntime = {
+    resolveStorePath: resolveSessionStorePathCore,
+    readSessionUpdatedAt: readSessionUpdatedAtCore,
+    // Plugin runtime property names are a shipped contract; the implementations
+    // route through the session accessor boundary.
+    recordSessionMetaFromInbound: recordInboundSessionMeta,
+    recordInboundSession,
+    updateLastRoute: updateSessionLastRoute,
+    resolveEntryResetFreshness: resolveSessionEntryResetFreshness,
+  };
+  const channelRuntime = {
     text: {
       chunkByNewline,
       chunkMarkdownText,
@@ -154,16 +144,16 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
       convertMarkdownTables,
     },
     reply: {
-      dispatchReplyWithBufferedBlockDispatcher,
+      dispatchReplyWithBufferedBlockDispatcher: dispatchReplyWithBufferedBlockDispatcherCore,
       createReplyDispatcherWithTyping,
       resolveEffectiveMessagesConfig,
       resolveHumanDelayConfig,
-      dispatchReplyFromConfig,
+      dispatchReplyFromConfig:
+        options?.dispatchReplyFromConfig ?? dispatchLowLevelChannelReplyFromConfig,
       withReplyDispatcher,
+      settleReplyDispatcher,
       finalizeInboundContext,
       formatAgentEnvelope,
-      /** @deprecated Prefer `BodyForAgent` + structured user-context blocks (do not build plaintext envelopes for prompts). */
-      formatInboundEnvelope,
       resolveEnvelopeFormatOptions,
     },
     routing: {
@@ -174,6 +164,14 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
       buildPairingReply,
       readAllowFromStore: ({ channel, accountId, env }) =>
         readChannelAllowFromStore(channel, env, accountId),
+      removeAllowFromStoreEntry: ({ channel, entry, accountId, env, pairingAdapter }) =>
+        removeChannelAllowFromStoreEntry({
+          channel,
+          entry,
+          accountId,
+          env,
+          pairingAdapter,
+        }),
       upsertPairingRequest: ({ channel, id, accountId, meta, env, pairingAdapter }) =>
         upsertChannelPairingRequest({
           channel,
@@ -185,28 +183,29 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
         }),
     },
     media: {
-      fetchRemoteMedia,
+      readRemoteMediaBuffer,
+      fetchRemoteMedia: readRemoteMediaBuffer,
+      saveRemoteMedia,
+      saveResponseMedia,
       saveMediaBuffer,
     },
     activity: {
       record: recordChannelActivity,
       get: getChannelActivity,
     },
-    session: {
-      resolveStorePath,
-      readSessionUpdatedAt,
-      recordSessionMetaFromInbound,
-      recordInboundSession,
-      updateLastRoute,
-    },
+    session: sessionRuntime,
     mentions: {
       buildMentionRegexes,
       matchesMentionPatterns,
       matchesMentionWithExplicit,
+      implicitMentionKindWhen,
+      resolveInboundMentionDecision,
     },
     reactions: {
+      createAckReactionHandle,
       shouldAckReaction,
       removeAckReactionAfterReply,
+      removeAckReactionHandleAfterReply,
     },
     groups: {
       resolveGroupPolicy: resolveChannelGroupPolicy,
@@ -222,117 +221,29 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
       shouldComputeCommandAuthorized,
       shouldHandleTextCommands,
     },
-    discord: {
-      messageActions: discordMessageActions,
-      auditChannelPermissions: auditDiscordChannelPermissions,
-      listDirectoryGroupsLive: listDiscordDirectoryGroupsLive,
-      listDirectoryPeersLive: listDiscordDirectoryPeersLive,
-      probeDiscord,
-      resolveChannelAllowlist: resolveDiscordChannelAllowlist,
-      resolveUserAllowlist: resolveDiscordUserAllowlist,
-      sendComponentMessage: sendDiscordComponentMessage,
-      sendMessageDiscord,
-      sendPollDiscord,
-      monitorDiscordProvider,
-      typing: {
-        pulse: sendTypingDiscord,
-        start: async ({ channelId, accountId, cfg, intervalMs }) =>
-          await createDiscordTypingLease({
-            channelId,
-            accountId,
-            cfg,
-            intervalMs,
-            pulse: async ({ channelId, accountId, cfg }) =>
-              void (await sendTypingDiscord(channelId, {
-                accountId,
-                cfg,
-              })),
-          }),
-      },
-      conversationActions: {
-        editMessage: editMessageDiscord,
-        deleteMessage: deleteMessageDiscord,
-        pinMessage: pinMessageDiscord,
-        unpinMessage: unpinMessageDiscord,
-        createThread: createThreadDiscord,
-        editChannel: editChannelDiscord,
-      },
+    outbound: {
+      loadAdapter: loadChannelOutboundAdapter,
     },
-    slack: {
-      listDirectoryGroupsLive: listSlackDirectoryGroupsLive,
-      listDirectoryPeersLive: listSlackDirectoryPeersLive,
-      probeSlack,
-      resolveChannelAllowlist: resolveSlackChannelAllowlist,
-      resolveUserAllowlist: resolveSlackUserAllowlist,
-      sendMessageSlack,
-      monitorSlackProvider,
-      handleSlackAction,
+    inbound: inboundRuntime,
+    turn: inboundRuntime,
+    threadBindings: {
+      setIdleTimeoutBySessionKey: ({ channelId, targetSessionKey, accountId, idleTimeoutMs }) =>
+        setChannelConversationBindingIdleTimeoutBySessionKey({
+          channelId,
+          targetSessionKey,
+          accountId,
+          idleTimeoutMs,
+        }),
+      setMaxAgeBySessionKey: ({ channelId, targetSessionKey, accountId, maxAgeMs }) =>
+        setChannelConversationBindingMaxAgeBySessionKey({
+          channelId,
+          targetSessionKey,
+          accountId,
+          maxAgeMs,
+        }),
     },
-    telegram: {
-      auditGroupMembership: auditTelegramGroupMembership,
-      collectUnmentionedGroupIds: collectTelegramUnmentionedGroupIds,
-      probeTelegram,
-      resolveTelegramToken,
-      sendMessageTelegram,
-      sendPollTelegram,
-      monitorTelegramProvider,
-      messageActions: telegramMessageActions,
-      typing: {
-        pulse: sendTypingTelegram,
-        start: async ({ to, accountId, cfg, intervalMs, messageThreadId }) =>
-          await createTelegramTypingLease({
-            to,
-            accountId,
-            cfg,
-            intervalMs,
-            messageThreadId,
-            pulse: async ({ to, accountId, cfg, messageThreadId }) =>
-              await sendTypingTelegram(to, {
-                accountId,
-                cfg,
-                messageThreadId,
-              }),
-          }),
-      },
-      conversationActions: {
-        editMessage: editMessageTelegram,
-        editReplyMarkup: editMessageReplyMarkupTelegram,
-        clearReplyMarkup: async (chatIdInput, messageIdInput, opts = {}) =>
-          await editMessageReplyMarkupTelegram(chatIdInput, messageIdInput, [], opts),
-        deleteMessage: deleteMessageTelegram,
-        renameTopic: renameForumTopicTelegram,
-        pinMessage: pinMessageTelegram,
-        unpinMessage: unpinMessageTelegram,
-      },
-    },
-    signal: {
-      probeSignal,
-      sendMessageSignal,
-      monitorSignalProvider,
-      messageActions: signalMessageActions,
-    },
-    imessage: {
-      monitorIMessageProvider,
-      probeIMessage,
-      sendMessageIMessage,
-    },
-    whatsapp: createRuntimeWhatsApp(),
-    line: {
-      listLineAccountIds,
-      resolveDefaultLineAccountId,
-      resolveLineAccount,
-      normalizeAccountId: normalizeLineAccountId,
-      probeLineBot,
-      sendMessageLine,
-      pushMessageLine,
-      pushMessagesLine,
-      pushFlexMessage,
-      pushTemplateMessage,
-      pushLocationMessage,
-      pushTextMessageWithQuickReplies,
-      createQuickReplyItems,
-      buildTemplateMessageFromPayload,
-      monitorLineProvider,
-    },
-  };
+    runtimeContexts: createChannelRuntimeContextRegistry(),
+  } satisfies PluginRuntime["channel"];
+
+  return channelRuntime as PluginRuntime["channel"];
 }

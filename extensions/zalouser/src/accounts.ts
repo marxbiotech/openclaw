@@ -1,30 +1,36 @@
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { createAccountListHelpers, type OpenClawConfig } from "openclaw/plugin-sdk/zalouser";
+import {
+  createAccountListHelpers,
+  resolveChannelMediaMaxBytes,
+} from "openclaw/plugin-sdk/account-helpers";
+// Zalouser plugin module implements accounts behavior.
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ResolvedZalouserAccount, ZalouserAccountConfig, ZalouserConfig } from "./types.js";
-import { checkZaloAuthenticated, getZaloUserInfo } from "./zalo-js.js";
+
+const loadZalouserAccountsRuntime = createLazyRuntimeModule(() => import("./accounts.runtime.js"));
 
 const {
   listAccountIds: listZalouserAccountIds,
   resolveDefaultAccountId: resolveDefaultZalouserAccountId,
-} = createAccountListHelpers("zalouser");
+  resolveAccountConfig: resolveMergedZalouserAccountConfig,
+} = createAccountListHelpers<ZalouserAccountConfig>("zalouser", {
+  omitKeys: ["defaultAccount"],
+  implicitDefaultAccount: {
+    channelKeys: ["profile"],
+    envVars: ["ZALOUSER_PROFILE", "ZCA_PROFILE"],
+  },
+});
 export { listZalouserAccountIds, resolveDefaultZalouserAccountId };
 
-function resolveAccountConfig(
-  cfg: OpenClawConfig,
-  accountId: string,
-): ZalouserAccountConfig | undefined {
-  const accounts = (cfg.channels?.zalouser as ZalouserConfig | undefined)?.accounts;
-  if (!accounts || typeof accounts !== "object") {
-    return undefined;
-  }
-  return accounts[accountId] as ZalouserAccountConfig | undefined;
-}
-
 function mergeZalouserAccountConfig(cfg: OpenClawConfig, accountId: string): ZalouserAccountConfig {
-  const raw = (cfg.channels?.zalouser ?? {}) as ZalouserConfig;
-  const { accounts: _ignored, defaultAccount: _ignored2, ...base } = raw;
-  const account = resolveAccountConfig(cfg, accountId) ?? {};
-  return { ...base, ...account };
+  const merged = resolveMergedZalouserAccountConfig(cfg, accountId);
+  return {
+    ...merged,
+    // Match Telegram's safe default: groups stay allowlisted unless explicitly opened.
+    groupPolicy: merged.groupPolicy ?? "allowlist",
+  };
 }
 
 function resolveProfile(config: ZalouserAccountConfig, accountId: string): string {
@@ -44,7 +50,9 @@ function resolveProfile(config: ZalouserAccountConfig, accountId: string): strin
 }
 
 function resolveZalouserAccountBase(params: { cfg: OpenClawConfig; accountId?: string | null }) {
-  const accountId = normalizeAccountId(params.accountId);
+  const accountId = normalizeAccountId(
+    params.accountId ?? resolveDefaultZalouserAccountId(params.cfg),
+  );
   const baseEnabled =
     (params.cfg.channels?.zalouser as ZalouserConfig | undefined)?.enabled !== false;
   const merged = mergeZalouserAccountConfig(params.cfg, accountId);
@@ -56,23 +64,6 @@ function resolveZalouserAccountBase(params: { cfg: OpenClawConfig; accountId?: s
   };
 }
 
-export async function resolveZalouserAccount(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-}): Promise<ResolvedZalouserAccount> {
-  const { accountId, enabled, merged, profile } = resolveZalouserAccountBase(params);
-  const authenticated = await checkZaloAuthenticated(profile);
-
-  return {
-    accountId,
-    name: merged.name?.trim() || undefined,
-    enabled,
-    profile,
-    authenticated,
-    config: merged,
-  };
-}
-
 export function resolveZalouserAccountSync(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
@@ -81,37 +72,24 @@ export function resolveZalouserAccountSync(params: {
 
   return {
     accountId,
-    name: merged.name?.trim() || undefined,
+    name: normalizeOptionalString(merged.name),
     enabled,
     profile,
     authenticated: false,
+    mediaMaxBytes: resolveChannelMediaMaxBytes({
+      cfg: params.cfg,
+      accountId,
+      resolveChannelLimitMb: () => merged.mediaMaxMb,
+    }),
     config: merged,
   };
 }
 
-export async function listEnabledZalouserAccounts(
-  cfg: OpenClawConfig,
-): Promise<ResolvedZalouserAccount[]> {
-  const ids = listZalouserAccountIds(cfg);
-  const accounts = await Promise.all(
-    ids.map((accountId) => resolveZalouserAccount({ cfg, accountId })),
-  );
-  return accounts.filter((account) => account.enabled);
-}
-
-export async function getZcaUserInfo(
+export async function checkZcaAuthenticated(
   profile: string,
-): Promise<{ userId?: string; displayName?: string } | null> {
-  const info = await getZaloUserInfo(profile);
-  if (!info) {
-    return null;
-  }
-  return {
-    userId: info.userId,
-    displayName: info.displayName,
-  };
+  options?: { credentialPersistence?: "persist" | "read-only" },
+): Promise<boolean> {
+  return await (await loadZalouserAccountsRuntime()).checkZaloAuthenticated(profile, options);
 }
-
-export { checkZaloAuthenticated as checkZcaAuthenticated };
 
 export type { ResolvedZalouserAccount } from "./types.js";

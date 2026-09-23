@@ -1,37 +1,29 @@
-import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import { buildSyntheticProvider } from "../../src/agents/models-config.providers.static.js";
+// Synthetic plugin entrypoint registers its OpenClaw integration.
+import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
+import { applySyntheticConnectionConfig, SYNTHETIC_DEFAULT_MODEL_REF } from "./onboard.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
+import { buildSyntheticProvider, SYNTHETIC_MODEL_DISCOVERY } from "./provider-catalog.js";
 
 const PROVIDER_ID = "synthetic";
 
-const syntheticPlugin = {
+export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
   name: "Synthetic Provider",
-  description: "Bundled Synthetic provider plugin",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
-    api.registerProvider({
-      id: PROVIDER_ID,
-      label: "Synthetic",
-      docsPath: "/providers/synthetic",
-      envVars: ["SYNTHETIC_API_KEY"],
-      auth: [],
-      catalog: {
-        order: "simple",
-        run: async (ctx) => {
-          const apiKey = ctx.resolveProviderApiKey(PROVIDER_ID).apiKey;
-          if (!apiKey) {
-            return null;
-          }
-          return {
-            provider: {
-              ...buildSyntheticProvider(),
-              apiKey,
-            },
-          };
-        },
-      },
-    });
+  description: "Synthetic provider plugin",
+  manifest,
+  provider: {
+    label: "Synthetic",
+    docsPath: "/providers/synthetic",
+    manifestAuth: {
+      defaultModel: SYNTHETIC_DEFAULT_MODEL_REF,
+      applyConfig: applySyntheticConnectionConfig,
+    },
+    catalog: {
+      discoveryMode: "strict",
+      buildProvider: buildSyntheticProvider,
+      buildStaticProvider: buildSyntheticProvider,
+      allowExplicitBaseUrl: true,
+      liveModelDiscovery: SYNTHETIC_MODEL_DISCOVERY,
+    },
   },
-};
-
-export default syntheticPlugin;
+});

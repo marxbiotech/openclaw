@@ -3,44 +3,122 @@
  *
  * Bridges the plugin registration phase (HTTP route) with the monitor phase
  * (command registration with MM API). The HTTP handler needs to know which
- * tokens are valid, and the monitor needs to store registered command IDs.
+ * tokens are known for fast-path routing, and the monitor needs to store
+ * registered command IDs.
  *
  * State is kept per-account so that multi-account deployments don't
  * overwrite each other's tokens, registered commands, or handlers.
  */
 
+import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/mattermost";
+import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
+import type { MattermostConfig } from "../types.js";
 import type { ResolvedMattermostAccount } from "./accounts.js";
-import { resolveSlashCommandConfig, type MattermostRegisteredCommand } from "./slash-commands.js";
-import { createSlashCommandHttpHandler } from "./slash-http.js";
+import {
+  createWebhookInFlightLimiter,
+  isRequestBodyLimitError,
+  readRequestBodyWithLimit,
+  sendHttpRequestRejection,
+  type OpenClawPluginApi,
+} from "./runtime-api.js";
+import {
+  normalizeSlashCommandTrigger,
+  parseSlashCommandPayload,
+  resolveSlashCommandConfig,
+  type MattermostRegisteredCommand,
+} from "./slash-commands.js";
+import {
+  clearMattermostSlashCommandValidationCacheForAccount,
+  createSlashCommandHttpHandler,
+} from "./slash-http.js";
+
+const MULTI_ACCOUNT_BODY_MAX_BYTES = 64 * 1024;
+const MULTI_ACCOUNT_BODY_TIMEOUT_MS = 5_000;
+const slashRouteInFlightLimiter = createWebhookInFlightLimiter();
+const SLASH_ROUTE_IN_FLIGHT_KEY = "mattermost:slash";
+const SLASH_AUTHENTICATED_IN_FLIGHT_KEY = `${SLASH_ROUTE_IN_FLIGHT_KEY}:authenticated`;
+type SlashHandler = ReturnType<typeof createSlashCommandHttpHandler>;
+type SlashHandlerMatchSource = "token" | "command";
+type SlashHandlerMatch =
+  | { kind: "none" }
+  | {
+      kind: "single";
+      source: SlashHandlerMatchSource;
+      handler: SlashHandler;
+      accountIds: string[];
+    }
+  | {
+      kind: "ambiguous";
+      source: SlashHandlerMatchSource;
+      accountIds: string[];
+    };
 
 // ─── Per-account state ───────────────────────────────────────────────────────
 
-export type SlashCommandAccountState = {
-  /** Tokens from registered commands, used for validation. */
+type SlashCommandAccountState = {
+  /** Tokens from registered/current commands, used for fast-path routing. */
   commandTokens: Set<string>;
   /** Registered command IDs for cleanup on shutdown. */
   registeredCommands: MattermostRegisteredCommand[];
   /** Current HTTP handler for this account. */
-  handler: ((req: IncomingMessage, res: ServerResponse) => Promise<void>) | null;
+  handler: SlashHandler | null;
   /** The account that activated slash commands. */
   account: ResolvedMattermostAccount;
   /** Map from trigger to original command name (for skill commands that start with oc_). */
   triggerMap: Map<string, string>;
 };
 
-/** Map from accountId → per-account slash command state. */
-const accountStates = new Map<string, SlashCommandAccountState>();
+/**
+ * Map from accountId → per-account slash command state.
+ *
+ * Anchored to globalThis so that jiti-loaded (route registration) and
+ * native-ESM-loaded (monitor/activation) module instances share the
+ * same Map. Without this, each module loader creates its own copy of
+ * the module-level variable and the HTTP handler never sees the tokens
+ * populated by the monitor.
+ */
+const ACCOUNT_STATES_KEY = Symbol.for("openclaw.mattermost.slash-account-states");
 
-export function resolveSlashHandlerForToken(token: string): {
-  kind: "none" | "single" | "ambiguous";
-  handler?: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
-  accountIds?: string[];
-} {
+function getSlashAccountStates(): Map<string, SlashCommandAccountState> {
+  const globalStore = globalThis as Record<PropertyKey, unknown>;
+  const existing = globalStore[ACCOUNT_STATES_KEY];
+  if (existing instanceof Map) {
+    return existing as Map<string, SlashCommandAccountState>;
+  }
+  const accountStates = new Map<string, SlashCommandAccountState>();
+  globalStore[ACCOUNT_STATES_KEY] = accountStates;
+  return accountStates;
+}
+
+const accountStates = getSlashAccountStates();
+
+function resolveSlashRouteInFlightKey(authorization: string | undefined): string {
+  const token = authorization?.match(/^Token ([^,\s]+)$/iu)?.[1];
+  if (!token) {
+    return SLASH_ROUTE_IN_FLIGHT_KEY;
+  }
+
+  let matched = false;
+  for (const state of accountStates.values()) {
+    for (const commandToken of state.commandTokens) {
+      matched = safeEqualSecret(token, commandToken) || matched;
+    }
+  }
+
+  // Only known credentials create keys, never arbitrary headers or raw secrets.
+  // Distinct credentials stay isolated even when one startup token is later revoked.
+  return matched
+    ? `${SLASH_AUTHENTICATED_IN_FLIGHT_KEY}:${createHash("sha256")
+        .update(`${SLASH_AUTHENTICATED_IN_FLIGHT_KEY}:${token}`)
+        .digest("hex")}`
+    : SLASH_ROUTE_IN_FLIGHT_KEY;
+}
+
+function resolveSlashHandlerForToken(token: string): SlashHandlerMatch {
   const matches: Array<{
     accountId: string;
-    handler: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
+    handler: SlashHandler;
   }> = [];
 
   for (const [accountId, state] of accountStates) {
@@ -53,11 +131,69 @@ export function resolveSlashHandlerForToken(token: string): {
     return { kind: "none" };
   }
   if (matches.length === 1) {
-    return { kind: "single", handler: matches[0]!.handler, accountIds: [matches[0]!.accountId] };
+    const match = matches[0];
+    if (!match) {
+      return { kind: "none" };
+    }
+    return {
+      kind: "single",
+      source: "token",
+      handler: match.handler,
+      accountIds: [match.accountId],
+    };
   }
 
   return {
     kind: "ambiguous",
+    source: "token",
+    accountIds: matches.map((entry) => entry.accountId),
+  };
+}
+
+function resolveSlashHandlerForCommand(params: {
+  teamId: string;
+  command: string;
+}): SlashHandlerMatch {
+  const trigger = normalizeSlashCommandTrigger(params.command);
+  if (!trigger) {
+    return { kind: "none" };
+  }
+
+  const matches: Array<{
+    accountId: string;
+    handler: SlashHandler;
+  }> = [];
+
+  for (const [accountId, state] of accountStates) {
+    if (
+      state.handler &&
+      state.registeredCommands.some(
+        (cmd) => cmd.teamId === params.teamId && cmd.trigger === trigger,
+      )
+    ) {
+      matches.push({ accountId, handler: state.handler });
+    }
+  }
+
+  if (matches.length === 0) {
+    return { kind: "none" };
+  }
+  if (matches.length === 1) {
+    const match = matches[0];
+    if (!match) {
+      return { kind: "none" };
+    }
+    return {
+      kind: "single",
+      source: "command",
+      handler: match.handler,
+      accountIds: [match.accountId],
+    };
+  }
+
+  return {
+    kind: "ambiguous",
+    source: "command",
     accountIds: matches.map((entry) => entry.accountId),
   };
 }
@@ -70,13 +206,6 @@ export function getSlashCommandState(accountId: string): SlashCommandAccountStat
 }
 
 /**
- * Get all active slash command account states.
- */
-export function getAllSlashCommandStates(): ReadonlyMap<string, SlashCommandAccountState> {
-  return accountStates;
-}
-
-/**
  * Activate slash commands for a specific account.
  * Called from the monitor after bot connects.
  */
@@ -86,8 +215,8 @@ export function activateSlashCommands(params: {
   registeredCommands: MattermostRegisteredCommand[];
   triggerMap?: Map<string, string>;
   api: {
-    cfg: import("openclaw/plugin-sdk/mattermost").OpenClawConfig;
-    runtime: import("openclaw/plugin-sdk/mattermost").RuntimeEnv;
+    cfg: import("./runtime-api.js").OpenClawConfig;
+    runtime: import("./runtime-api.js").RuntimeEnv;
   };
   log?: (msg: string) => void;
 }) {
@@ -100,7 +229,7 @@ export function activateSlashCommands(params: {
     account,
     cfg: api.cfg,
     runtime: api.runtime,
-    commandTokens: tokenSet,
+    registeredCommands,
     triggerMap,
     log,
   });
@@ -128,14 +257,16 @@ export function deactivateSlashCommands(accountId?: string) {
       state.commandTokens.clear();
       state.registeredCommands = [];
       state.handler = null;
+      clearMattermostSlashCommandValidationCacheForAccount(accountId);
       accountStates.delete(accountId);
     }
   } else {
     // Deactivate all accounts (full shutdown)
-    for (const [, state] of accountStates) {
+    for (const [stateAccountId, state] of accountStates) {
       state.commandTokens.clear();
       state.registeredCommands = [];
       state.handler = null;
+      clearMattermostSlashCommandValidationCacheForAccount(stateAccountId);
     }
     accountStates.clear();
   }
@@ -145,11 +276,13 @@ export function deactivateSlashCommands(accountId?: string) {
  * Register the HTTP route for slash command callbacks.
  * Called during plugin registration.
  *
- * The single HTTP route dispatches to the correct per-account handler
- * by matching the inbound token against each account's registered tokens.
+ * The single HTTP route dispatches to the correct per-account handler by
+ * matching the inbound token against each account's known tokens, falling back
+ * to registered team/trigger ownership so upstream validation can accept a
+ * rotated Mattermost token.
  */
 export function registerSlashCommandRoute(api: OpenClawPluginApi) {
-  const mmConfig = api.config.channels?.mattermost as Record<string, unknown> | undefined;
+  const mmConfig = api.config.channels?.mattermost as MattermostConfig | undefined;
 
   // Collect callback paths from both top-level and per-account config.
   // Command registration uses account.config.commands, so the HTTP route
@@ -180,16 +313,17 @@ export function registerSlashCommandRoute(api: OpenClawPluginApi) {
     | undefined;
   addCallbackPaths(commandsRaw);
 
-  const accountsRaw = (mmConfig?.accounts ?? {}) as Record<string, unknown>;
+  const accountsRaw = mmConfig?.accounts ?? {};
   for (const accountId of Object.keys(accountsRaw)) {
-    const accountCfg = accountsRaw[accountId] as Record<string, unknown> | undefined;
-    const accountCommandsRaw = accountCfg?.commands as
-      | Partial<import("./slash-commands.js").MattermostSlashCommandConfig>
-      | undefined;
+    const accountCommandsRaw = accountsRaw[accountId]?.commands;
     addCallbackPaths(accountCommandsRaw);
   }
 
-  const routeHandler = async (req: IncomingMessage, res: ServerResponse) => {
+  const dispatchRoute = async (
+    req: IncomingMessage,
+    res: ServerResponse,
+    onRequestAuthenticated: () => void,
+  ) => {
     if (accountStates.size === 0) {
       res.statusCode = 503;
       res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -202,14 +336,14 @@ export function registerSlashCommandRoute(api: OpenClawPluginApi) {
       return;
     }
 
-    // We need to peek at the token to route to the right account handler.
-    // Since each account handler also validates the token, we find the
-    // account whose token set contains the inbound token and delegate.
+    // We need to peek at the body to route to the right account handler. Each
+    // account handler still performs upstream token validation before running a
+    // command.
 
     // If there's only one active account (common case), route directly.
     if (accountStates.size === 1) {
-      const [, state] = [...accountStates.entries()][0]!;
-      if (!state.handler) {
+      const state = accountStates.values().next().value;
+      if (!state?.handler) {
         res.statusCode = 503;
         res.setHeader("Content-Type", "application/json; charset=utf-8");
         res.end(
@@ -220,27 +354,33 @@ export function registerSlashCommandRoute(api: OpenClawPluginApi) {
         );
         return;
       }
-      await state.handler(req, res);
+      await state.handler(req, res, undefined, onRequestAuthenticated);
       return;
     }
 
-    // Multi-account: buffer the body, find the matching account by token,
-    // then replay the request to the correct handler.
-    const chunks: Buffer[] = [];
-    const MAX_BODY = 64 * 1024;
-    let size = 0;
-    for await (const chunk of req) {
-      size += (chunk as Buffer).length;
-      if (size > MAX_BODY) {
-        res.statusCode = 413;
-        res.end("Payload Too Large");
+    // Multi-account: buffer the body, then find the matching account by token or
+    // registered team/trigger before account-specific validation.
+    // Use the bounded helper so a slow/never-finishing client cannot tie up the
+    // routing handler indefinitely (Slowloris).
+    let bodyStr: string;
+    try {
+      bodyStr = await readRequestBodyWithLimit(req, {
+        maxBytes: MULTI_ACCOUNT_BODY_MAX_BYTES,
+        timeoutMs: MULTI_ACCOUNT_BODY_TIMEOUT_MS,
+        // Defer destruction so the rejections below reach Mattermost before the close.
+        destroyOnLimit: false,
+      });
+    } catch (error) {
+      if (isRequestBodyLimitError(error, "REQUEST_BODY_TIMEOUT")) {
+        await sendHttpRequestRejection(req, res, 408, "Request body timeout");
         return;
       }
-      chunks.push(chunk as Buffer);
+      await sendHttpRequestRejection(req, res, 413, "Payload Too Large");
+      return;
     }
-    const bodyStr = Buffer.concat(chunks).toString("utf8");
 
-    // Parse just the token to find the right account
+    // Parse the token for the fast path; if it misses, parse the full slash
+    // payload so rotated tokens can still route by registered team/trigger.
     let token: string | null = null;
     const ct = req.headers["content-type"] ?? "";
     try {
@@ -253,7 +393,16 @@ export function registerSlashCommandRoute(api: OpenClawPluginApi) {
       // parse failed — will be caught by handler
     }
 
-    const match = token ? resolveSlashHandlerForToken(token) : { kind: "none" as const };
+    let match: SlashHandlerMatch = token ? resolveSlashHandlerForToken(token) : { kind: "none" };
+    if (match.kind === "none") {
+      const payload = parseSlashCommandPayload(bodyStr, ct);
+      if (payload) {
+        match = resolveSlashHandlerForCommand({
+          teamId: payload.team_id,
+          command: payload.command,
+        });
+      }
+    }
 
     if (match.kind === "none") {
       // No matching account — reject
@@ -270,36 +419,50 @@ export function registerSlashCommandRoute(api: OpenClawPluginApi) {
 
     if (match.kind === "ambiguous") {
       api.logger.warn?.(
-        `mattermost: slash callback token matched multiple accounts (${match.accountIds?.join(", ")})`,
+        `mattermost: slash callback matched multiple accounts via ${match.source} (${match.accountIds.join(", ")})`,
       );
+      const conflictText =
+        match.source === "token"
+          ? "Conflict: command token is not unique across accounts."
+          : "Conflict: slash command is not unique across accounts.";
       res.statusCode = 409;
       res.setHeader("Content-Type", "application/json; charset=utf-8");
       res.end(
         JSON.stringify({
           response_type: "ephemeral",
-          text: "Conflict: command token is not unique across accounts.",
+          text: conflictText,
         }),
       );
       return;
     }
 
-    const matchedHandler = match.handler!;
+    // Routing already enforced the body limit. Retain the original transport
+    // and pass those bytes forward instead of replaying a socket-less request.
+    await match.handler(req, res, bodyStr, onRequestAuthenticated);
+  };
 
-    // Replay: create a synthetic readable that re-emits the buffered body
-    const { Readable } = await import("node:stream");
-    const syntheticReq = new Readable({
-      read() {
-        this.push(Buffer.from(bodyStr, "utf8"));
-        this.push(null);
-      },
-    }) as IncomingMessage;
+  const routeHandler = async (req: IncomingMessage, res: ServerResponse) => {
+    // Header matching only selects a capacity pool. The handler still authenticates
+    // the body token and current command before releasing this admission guard.
+    const inFlightKey = resolveSlashRouteInFlightKey(req.headers.authorization);
+    if (!slashRouteInFlightLimiter.tryAcquire(inFlightKey)) {
+      await sendHttpRequestRejection(req, res, 429, "Too Many Requests");
+      return;
+    }
 
-    // Copy necessary IncomingMessage properties
-    syntheticReq.method = req.method;
-    syntheticReq.url = req.url;
-    syntheticReq.headers = req.headers;
-
-    await matchedHandler(syntheticReq, res);
+    let released = false;
+    const release = () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      slashRouteInFlightLimiter.release(inFlightKey);
+    };
+    try {
+      await dispatchRoute(req, res, release);
+    } finally {
+      release();
+    }
   };
 
   for (const callbackPath of callbackPaths) {
@@ -308,6 +471,5 @@ export function registerSlashCommandRoute(api: OpenClawPluginApi) {
       auth: "plugin",
       handler: routeHandler,
     });
-    api.logger.info?.(`mattermost: registered slash command callback at ${callbackPath}`);
   }
 }

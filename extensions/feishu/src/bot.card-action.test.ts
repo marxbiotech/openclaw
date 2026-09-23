@@ -1,19 +1,25 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import {
-  handleFeishuCardAction,
-  resetProcessedFeishuCardActionTokensForTests,
-  type FeishuCardActionEvent,
-} from "./card-action.js";
+import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
+// Feishu tests cover bot.card action plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
+import { afterAll, afterEach, describe, it, expect, vi, beforeEach } from "vitest";
+import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
+import { processedCardActions, resolvedCardActionChatTypes } from "./card-action-state.js";
+import { handleFeishuCardAction, type FeishuCardActionEvent } from "./card-action.js";
 import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
+import {
+  expectFirstSentCardUsesFillWidthOnly,
+  expectSentCardHasP2pAction,
+} from "./card-test-helpers.js";
 import {
   FEISHU_APPROVAL_CANCEL_ACTION,
   FEISHU_APPROVAL_CONFIRM_ACTION,
   FEISHU_APPROVAL_REQUEST_ACTION,
 } from "./card-ux-approval.js";
 
-// Mock resolveFeishuAccount
+// Mock account resolution
 vi.mock("./accounts.js", () => ({
   resolveFeishuAccount: vi.fn().mockReturnValue({ accountId: "mock-account" }),
+  resolveFeishuRuntimeAccount: vi.fn().mockReturnValue({ accountId: "mock-account" }),
 }));
 
 // Mock bot.js to verify handleFeishuMessage call
@@ -21,8 +27,13 @@ vi.mock("./bot.js", () => ({
   handleFeishuMessage: vi.fn(),
 }));
 
+const createFeishuClientMock = vi.hoisted(() => vi.fn());
 const sendCardFeishuMock = vi.hoisted(() => vi.fn());
 const sendMessageFeishuMock = vi.hoisted(() => vi.fn());
+
+vi.mock("./client.js", () => ({
+  createFeishuClient: createFeishuClientMock,
+}));
 
 vi.mock("./send.js", () => ({
   sendCardFeishu: sendCardFeishuMock,
@@ -32,34 +43,149 @@ vi.mock("./send.js", () => ({
 import { handleFeishuMessage } from "./bot.js";
 
 describe("Feishu Card Action Handler", () => {
-  const cfg = {} as any; // Minimal mock
-  const runtime = { log: vi.fn(), error: vi.fn() } as any;
+  const cfg: ClawdbotConfig = {};
+  const runtime: RuntimeEnv = createRuntimeEnv();
+
+  afterAll(() => {
+    vi.doUnmock("./accounts.js");
+    vi.doUnmock("./bot.js");
+    vi.doUnmock("./client.js");
+    vi.doUnmock("./send.js");
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function createCardActionEvent(params: {
+    token: string;
+    actionValue: Record<string, unknown>;
+    chatId?: string;
+    openId?: string;
+    userId?: string;
+    unionId?: string;
+  }): FeishuCardActionEvent {
+    const openId = params.openId ?? "u123";
+    const userId = params.userId ?? "uid1";
+    return {
+      operator: { open_id: openId, user_id: userId, union_id: params.unionId ?? "un1" },
+      token: params.token,
+      action: {
+        value: params.actionValue,
+        tag: "button",
+      },
+      context: { open_id: openId, user_id: userId, chat_id: params.chatId ?? "chat1" },
+    };
+  }
+
+  function createStructuredQuickActionEvent(params: {
+    token: string;
+    action: string;
+    command?: string;
+    chatId?: string;
+    chatType?: "group" | "p2p";
+    operatorOpenId?: string;
+    actionOpenId?: string;
+  }): FeishuCardActionEvent {
+    return createCardActionEvent({
+      token: params.token,
+      chatId: params.chatId,
+      openId: params.operatorOpenId,
+      actionValue: createFeishuCardInteractionEnvelope({
+        k: "quick",
+        a: params.action,
+        ...(params.command ? { q: params.command } : {}),
+        c: {
+          u: params.actionOpenId ?? params.operatorOpenId ?? "u123",
+          h: params.chatId ?? "chat1",
+          t: params.chatType ?? "group",
+          e: Date.now() + 60_000,
+        },
+      }),
+    });
+  }
 
   beforeEach(() => {
     vi.clearAllMocks();
-    resetProcessedFeishuCardActionTokensForTests();
+    createFeishuClientMock.mockReset().mockReturnValue({
+      im: {
+        chat: {
+          get: vi.fn().mockResolvedValue({ code: 0, data: { chat_type: "group" } }),
+        },
+      },
+    });
+    vi.mocked(handleFeishuMessage)
+      .mockReset()
+      .mockResolvedValue(undefined as never);
+    processedCardActions.clear();
+    resolvedCardActionChatTypes.clear();
   });
+
+  function mockCallArg(
+    mock: { mock: { calls: unknown[][] } },
+    index: number,
+    label: string,
+  ): unknown {
+    const call = mock.mock.calls[index];
+    if (!call) {
+      throw new Error(`Expected ${label} call ${index + 1}`);
+    }
+    return call[0];
+  }
+
+  const requireRecord = createRequireRecord("object", "expected-label-capitalized");
+
+  function handleMessageEvent(callIndex = 0) {
+    const arg = requireRecord(
+      mockCallArg(vi.mocked(handleFeishuMessage), callIndex, "handleFeishuMessage"),
+      "handleFeishuMessage args",
+    );
+    return requireRecord(arg.event, "Feishu message event");
+  }
+
+  function handleMessage(callIndex = 0) {
+    return requireRecord(handleMessageEvent(callIndex).message, "Feishu message");
+  }
+
+  function sendMessageCall(callIndex = 0) {
+    return requireRecord(
+      mockCallArg(sendMessageFeishuMock, callIndex, "sendMessageFeishu"),
+      "sendMessageFeishu args",
+    );
+  }
+
+  function sendCardCall(callIndex = 0) {
+    return requireRecord(
+      mockCallArg(sendCardFeishuMock, callIndex, "sendCardFeishu"),
+      "sendCardFeishu args",
+    );
+  }
 
   it("handles card action with text payload", async () => {
     const event: FeishuCardActionEvent = {
       operator: { open_id: "u123", user_id: "uid1", union_id: "un1" },
       token: "tok1",
-      action: { value: { text: "/ping" }, tag: "button" },
+      action: {
+        value: createFeishuCardInteractionEnvelope({
+          k: "quick",
+          a: "feishu.quick_actions.ping",
+          q: "/ping",
+          c: { u: "u123", h: "chat1", t: "group", e: Date.now() + 60_000 },
+        }),
+        tag: "button",
+      },
       context: { open_id: "u123", user_id: "uid1", chat_id: "chat1" },
+      open_message_id: "om_card_message",
     };
 
     await handleFeishuCardAction({ cfg, event, runtime });
 
-    expect(handleFeishuMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: expect.objectContaining({
-          message: expect.objectContaining({
-            content: '{"text":"/ping"}',
-            chat_id: "chat1",
-          }),
-        }),
-      }),
-    );
+    const message = handleMessage();
+    expect(message.content).toBe('{"text":"/ping"}');
+    expect(message.chat_id).toBe("chat1");
+    expect(message.reply_target_message_id).toBe("om_card_message");
+    expect(message.typing_target_message_id).toBe("om_card_message");
   });
 
   it("handles card action with JSON object payload", async () => {
@@ -72,53 +198,29 @@ describe("Feishu Card Action Handler", () => {
 
     await handleFeishuCardAction({ cfg, event, runtime });
 
-    expect(handleFeishuMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: expect.objectContaining({
-          message: expect.objectContaining({
-            content: '{"text":"{\\"key\\":\\"val\\"}"}',
-            chat_id: "u123", // Fallback to open_id
-          }),
-        }),
-      }),
-    );
+    const message = handleMessage();
+    expect(message.content).toBe('{"text":"{\\"key\\":\\"val\\"}"}');
+    expect(message.chat_id).toBe("u123"); // Fallback to open_id
   });
 
   it("routes quick command actions with operator and conversation context", async () => {
-    const event: FeishuCardActionEvent = {
-      operator: { open_id: "u123", user_id: "uid1", union_id: "un1" },
+    const event = createStructuredQuickActionEvent({
       token: "tok3",
-      action: {
-        value: createFeishuCardInteractionEnvelope({
-          k: "quick",
-          a: "feishu.quick_actions.help",
-          q: "/help",
-          c: { u: "u123", h: "chat1", t: "group", e: Date.now() + 60_000 },
-        }),
-        tag: "button",
-      },
-      context: { open_id: "u123", user_id: "uid1", chat_id: "chat1" },
-    };
+      action: "feishu.quick_actions.help",
+      command: "/help",
+    });
 
     await handleFeishuCardAction({ cfg, event, runtime });
 
-    expect(handleFeishuMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: expect.objectContaining({
-          sender: expect.objectContaining({
-            sender_id: expect.objectContaining({
-              open_id: "u123",
-              user_id: "uid1",
-              union_id: "un1",
-            }),
-          }),
-          message: expect.objectContaining({
-            chat_id: "chat1",
-            content: '{"text":"/help"}',
-          }),
-        }),
-      }),
-    );
+    const eventArg = handleMessageEvent();
+    const sender = requireRecord(eventArg.sender, "Feishu sender");
+    const senderId = requireRecord(sender.sender_id, "Feishu sender id");
+    expect(senderId.open_id).toBe("u123");
+    expect(senderId.user_id).toBe("uid1");
+    expect(senderId.union_id).toBe("un1");
+    const message = requireRecord(eventArg.message, "Feishu message");
+    expect(message.chat_id).toBe("chat1");
+    expect(message.content).toBe('{"text":"/help"}');
   });
 
   it("opens an approval card for metadata actions", async () => {
@@ -148,118 +250,141 @@ describe("Feishu Card Action Handler", () => {
 
     await handleFeishuCardAction({ cfg, event, runtime, accountId: "main" });
 
-    expect(sendCardFeishuMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        to: "chat:chat1",
-        accountId: "main",
-        card: expect.objectContaining({
-          header: expect.objectContaining({
-            title: expect.objectContaining({ content: "Confirm action" }),
-          }),
-          body: expect.objectContaining({
-            elements: expect.arrayContaining([
-              expect.objectContaining({
-                tag: "action",
-                actions: expect.arrayContaining([
-                  expect.objectContaining({
-                    value: expect.objectContaining({
-                      c: expect.objectContaining({
-                        u: "u123",
-                        h: "chat1",
-                        t: "group",
-                        s: "agent:codex:feishu:chat:chat1",
-                      }),
-                    }),
-                  }),
-                ]),
-              }),
-            ]),
-          }),
-        }),
-      }),
-    );
+    const cardCall = sendCardCall();
+    expect(cardCall.to).toBe("chat:chat1");
+    expect(cardCall.accountId).toBe("main");
+    const card = requireRecord(cardCall.card, "Feishu card");
+    expect(requireRecord(card.config, "Feishu card config").width_mode).toBe("fill");
+    const header = requireRecord(card.header, "Feishu card header");
+    expect(requireRecord(header.title, "Feishu card title").content).toBe("Confirm action");
+    const body = requireRecord(card.body, "Feishu card body");
+    const elements = body.elements as Array<Record<string, unknown>>;
+    const actionElement = elements.find((element) => element.tag === "action");
+    if (!actionElement) {
+      throw new Error("Expected action element");
+    }
+    const actions = actionElement.actions as Array<Record<string, unknown>>;
+    const actionValue = requireRecord(actions[0]?.value, "Feishu approval action value");
+    const approvalContext = requireRecord(actionValue.c, "Feishu approval context");
+    expect(approvalContext.u).toBe("u123");
+    expect(approvalContext.h).toBe("chat1");
+    expect(approvalContext.t).toBe("group");
+    expect(approvalContext.s).toBe("agent:codex:feishu:chat:chat1");
+    expect(typeof approvalContext.e).toBe("number");
+    expectFirstSentCardUsesFillWidthOnly(sendCardFeishuMock);
     expect(handleFeishuMessage).not.toHaveBeenCalled();
   });
 
+  it("does not open approval cards when the expiry would exceed a valid Date", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(8_640_000_000_000_000));
+    try {
+      const event: FeishuCardActionEvent = {
+        operator: { open_id: "u123", user_id: "uid1", union_id: "un1" },
+        token: "tok4-boundary",
+        action: {
+          value: createFeishuCardInteractionEnvelope({
+            k: "meta",
+            a: FEISHU_APPROVAL_REQUEST_ACTION,
+            m: {
+              command: "/new",
+              prompt: "Start a fresh session?",
+            },
+            c: {
+              u: "u123",
+              h: "chat1",
+              t: "group",
+              s: "agent:codex:feishu:chat:chat1",
+              e: 8_640_000_000_000_000,
+            },
+          }),
+          tag: "button",
+        },
+        context: { open_id: "u123", user_id: "uid1", chat_id: "chat1" },
+      };
+
+      await handleFeishuCardAction({ cfg, event, runtime, accountId: "main" });
+
+      expect(sendCardFeishuMock).not.toHaveBeenCalled();
+      const sendMessage = sendMessageCall();
+      expect(sendMessage.to).toBe("chat:chat1");
+      expect(String(sendMessage.text)).toContain("payload is invalid");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("runs approval confirmation through the normal message path", async () => {
-    const event: FeishuCardActionEvent = {
-      operator: { open_id: "u123", user_id: "uid1", union_id: "un1" },
+    const event = createStructuredQuickActionEvent({
       token: "tok5",
-      action: {
-        value: createFeishuCardInteractionEnvelope({
-          k: "quick",
-          a: FEISHU_APPROVAL_CONFIRM_ACTION,
-          q: "/new",
-          c: { u: "u123", h: "chat1", t: "group", e: Date.now() + 60_000 },
-        }),
-        tag: "button",
-      },
-      context: { open_id: "u123", user_id: "uid1", chat_id: "chat1" },
-    };
+      action: FEISHU_APPROVAL_CONFIRM_ACTION,
+      command: "/new",
+    });
 
     await handleFeishuCardAction({ cfg, event, runtime });
 
-    expect(handleFeishuMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: expect.objectContaining({
-          message: expect.objectContaining({
-            content: '{"text":"/new"}',
-          }),
-        }),
-      }),
-    );
+    const message = handleMessage();
+    expect(message.content).toBe('{"text":"/new"}');
+    expect(message.mentions).toBeUndefined();
+  });
+
+  it("marks synthetic group card callbacks as mentioning the bot", async () => {
+    const event = createStructuredQuickActionEvent({
+      token: "tok5-mention",
+      action: FEISHU_APPROVAL_CONFIRM_ACTION,
+      command: "/new",
+      chatType: "group",
+    });
+
+    await handleFeishuCardAction({
+      cfg,
+      event,
+      runtime,
+      botOpenId: "ou_bot",
+    });
+
+    const message = handleMessage();
+    expect(message.chat_type).toBe("group");
+    expect(message.mentions).toEqual([
+      {
+        key: "mention_bot",
+        id: { open_id: "ou_bot" },
+        name: "bot",
+      },
+    ]);
   });
 
   it("safely rejects stale structured actions", async () => {
-    const event: FeishuCardActionEvent = {
-      operator: { open_id: "u123", user_id: "uid1", union_id: "un1" },
+    const event = createCardActionEvent({
       token: "tok6",
-      action: {
-        value: createFeishuCardInteractionEnvelope({
-          k: "quick",
-          a: "feishu.quick_actions.help",
-          q: "/help",
-          c: { u: "u123", h: "chat1", t: "group", e: Date.now() - 1 },
-        }),
-        tag: "button",
-      },
-      context: { open_id: "u123", user_id: "uid1", chat_id: "chat1" },
-    };
+      actionValue: createFeishuCardInteractionEnvelope({
+        k: "quick",
+        a: "feishu.quick_actions.help",
+        q: "/help",
+        c: { u: "u123", h: "chat1", t: "group", e: Date.now() - 1 },
+      }),
+    });
 
     await handleFeishuCardAction({ cfg, event, runtime });
 
-    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        to: "chat:chat1",
-        text: expect.stringContaining("expired"),
-      }),
-    );
+    const sendMessage = sendMessageCall();
+    expect(sendMessage.to).toBe("chat:chat1");
+    expect(String(sendMessage.text)).toContain("expired");
     expect(handleFeishuMessage).not.toHaveBeenCalled();
   });
 
   it("safely rejects wrong-user structured actions", async () => {
-    const event: FeishuCardActionEvent = {
-      operator: { open_id: "u999", user_id: "uid1", union_id: "un1" },
+    const event = createStructuredQuickActionEvent({
       token: "tok7",
-      action: {
-        value: createFeishuCardInteractionEnvelope({
-          k: "quick",
-          a: "feishu.quick_actions.help",
-          q: "/help",
-          c: { u: "u123", h: "chat1", t: "group", e: Date.now() + 60_000 },
-        }),
-        tag: "button",
-      },
-      context: { open_id: "u999", user_id: "uid1", chat_id: "chat1" },
-    };
+      action: "feishu.quick_actions.help",
+      command: "/help",
+      operatorOpenId: "u999",
+      actionOpenId: "u123",
+    });
 
     await handleFeishuCardAction({ cfg, event, runtime });
 
-    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: expect.stringContaining("different user"),
-      }),
-    );
+    expect(String(sendMessageCall().text)).toContain("different user");
     expect(handleFeishuMessage).not.toHaveBeenCalled();
   });
 
@@ -280,59 +405,181 @@ describe("Feishu Card Action Handler", () => {
 
     await handleFeishuCardAction({ cfg, event, runtime });
 
-    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        to: "chat:chat1",
-        text: "Cancelled.",
-      }),
-    );
+    const sendMessage = sendMessageCall();
+    expect(sendMessage.to).toBe("chat:chat1");
+    expect(sendMessage.text).toBe("Cancelled.");
   });
 
   it("preserves p2p callbacks for DM quick actions", async () => {
-    const event: FeishuCardActionEvent = {
-      operator: { open_id: "u123", user_id: "uid1", union_id: "un1" },
+    const event = createStructuredQuickActionEvent({
       token: "tok9",
-      action: {
-        value: createFeishuCardInteractionEnvelope({
-          k: "quick",
-          a: "feishu.quick_actions.help",
-          q: "/help",
-          c: { u: "u123", h: "p2p-chat-1", t: "p2p", e: Date.now() + 60_000 },
-        }),
-        tag: "button",
+      action: "feishu.quick_actions.help",
+      command: "/help",
+      chatId: "p2p-chat-1",
+      chatType: "p2p",
+    });
+
+    await handleFeishuCardAction({ cfg, event, runtime, botOpenId: "ou_bot" });
+
+    const message = handleMessage();
+    expect(message.chat_id).toBe("p2p-chat-1");
+    expect(message.chat_type).toBe("p2p");
+    expect(message.mentions).toBeUndefined();
+  });
+
+  it("resolves DM chat type from the Feishu chat API when card context omits it", async () => {
+    createFeishuClientMock.mockReturnValueOnce({
+      im: {
+        chat: {
+          get: vi.fn().mockResolvedValue({ code: 0, data: { chat_type: "p2p" } }),
+        },
       },
-      context: { open_id: "u123", user_id: "uid1", chat_id: "p2p-chat-1" },
-    };
+    });
+    const event = createCardActionEvent({
+      token: "tok9b",
+      chatId: "oc_dm_chat_123",
+      actionValue: { text: "/help" },
+    });
 
     await handleFeishuCardAction({ cfg, event, runtime });
 
-    expect(handleFeishuMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: expect.objectContaining({
-          message: expect.objectContaining({
-            chat_id: "p2p-chat-1",
-            chat_type: "p2p",
-          }),
-        }),
+    const message = handleMessage();
+    expect(message.chat_id).toBe("oc_dm_chat_123");
+    expect(message.chat_type).toBe("p2p");
+    expect(createFeishuClientMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not cache resolved chat type when expiry would exceed a valid Date", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(8_640_000_000_000_000));
+    try {
+      const getChat = vi.fn().mockResolvedValue({ code: 0, data: { chat_type: "p2p" } });
+      createFeishuClientMock.mockReturnValue({
+        im: {
+          chat: {
+            get: getChat,
+          },
+        },
+      });
+      const firstEvent = createCardActionEvent({
+        token: "tok9b-boundary-1",
+        chatId: "oc_dm_chat_boundary",
+        actionValue: { text: "/help" },
+      });
+      const secondEvent = createCardActionEvent({
+        token: "tok9b-boundary-2",
+        chatId: "oc_dm_chat_boundary",
+        actionValue: { text: "/help" },
+      });
+
+      await handleFeishuCardAction({ cfg, event: firstEvent, runtime });
+      await handleFeishuCardAction({ cfg, event: secondEvent, runtime });
+
+      expect(getChat).toHaveBeenCalledTimes(2);
+      expect(handleFeishuMessage).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses resolved DM chat type when building approval cards without stored context", async () => {
+    createFeishuClientMock.mockReturnValueOnce({
+      im: {
+        chat: {
+          get: vi.fn().mockResolvedValue({ code: 0, data: { chat_mode: "p2p" } }),
+        },
+      },
+    });
+    const event = createCardActionEvent({
+      token: "tok9c",
+      chatId: "oc_dm_chat_234",
+      actionValue: createFeishuCardInteractionEnvelope({
+        k: "meta",
+        a: FEISHU_APPROVAL_REQUEST_ACTION,
+        m: {
+          command: "/new",
+          prompt: "Start a fresh session?",
+        },
+        c: {
+          u: "u123",
+          h: "oc_dm_chat_234",
+          e: Date.now() + 60_000,
+        },
       }),
+    });
+
+    await handleFeishuCardAction({ cfg, event, runtime, accountId: "main" });
+
+    expectSentCardHasP2pAction(sendCardFeishuMock);
+    expect(createFeishuClientMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to p2p when Feishu chat API returns an error", async () => {
+    createFeishuClientMock.mockReturnValueOnce({
+      im: {
+        chat: {
+          get: vi.fn().mockResolvedValue({ code: 99, msg: "not found" }),
+        },
+      },
+    });
+    const event = createCardActionEvent({
+      token: "tok9d",
+      chatId: "oc_unknown_chat_456",
+      actionValue: { text: "/help" },
+    });
+
+    await handleFeishuCardAction({ cfg, event, runtime });
+
+    expect(handleMessage().chat_type).toBe("p2p");
+  });
+
+  it("keeps Feishu chat lookup error logs UTF-16 safe at the truncation boundary", async () => {
+    const log = vi.fn();
+    createFeishuClientMock.mockReturnValueOnce({
+      im: {
+        chat: {
+          get: vi.fn().mockResolvedValue({ code: 99, msg: `${"x".repeat(499)}😀tail` }),
+        },
+      },
+    });
+    const event = createCardActionEvent({
+      token: "tok9d-utf16",
+      chatId: "oc_unknown_chat_utf16",
+      actionValue: { text: "/help" },
+    });
+
+    await handleFeishuCardAction({ cfg, event, runtime: { ...runtime, log } });
+
+    expect(log).toHaveBeenCalledWith(
+      `feishu[mock-account]: failed to resolve chat type: ${"x".repeat(499)}; defaulting to p2p`,
     );
   });
 
-  it("drops duplicate structured callback tokens", async () => {
-    const event: FeishuCardActionEvent = {
-      operator: { open_id: "u123", user_id: "uid1", union_id: "un1" },
-      token: "tok10",
-      action: {
-        value: createFeishuCardInteractionEnvelope({
-          k: "quick",
-          a: "feishu.quick_actions.help",
-          q: "/help",
-          c: { u: "u123", h: "chat1", t: "group", e: Date.now() + 60_000 },
-        }),
-        tag: "button",
+  it("falls back to p2p when Feishu chat API throws", async () => {
+    createFeishuClientMock.mockReturnValueOnce({
+      im: {
+        chat: {
+          get: vi.fn().mockRejectedValue(new Error("network failure")),
+        },
       },
-      context: { open_id: "u123", user_id: "uid1", chat_id: "chat1" },
-    };
+    });
+    const event = createCardActionEvent({
+      token: "tok9e",
+      chatId: "oc_broken_chat_789",
+      actionValue: { text: "/help" },
+    });
+
+    await handleFeishuCardAction({ cfg, event, runtime });
+
+    expect(handleMessage().chat_type).toBe("p2p");
+  });
+
+  it("drops duplicate structured callback tokens", async () => {
+    const event = createStructuredQuickActionEvent({
+      token: "tok10",
+      action: "feishu.quick_actions.help",
+      command: "/help",
+    });
 
     await handleFeishuCardAction({ cfg, event, runtime });
     await handleFeishuCardAction({ cfg, event, runtime });
@@ -340,21 +587,67 @@ describe("Feishu Card Action Handler", () => {
     expect(handleFeishuMessage).toHaveBeenCalledTimes(1);
   });
 
-  it("releases a claimed token when dispatch fails so retries can succeed", async () => {
-    const event: FeishuCardActionEvent = {
-      operator: { open_id: "u123", user_id: "uid1", union_id: "un1" },
-      token: "tok11",
-      action: {
-        value: createFeishuCardInteractionEnvelope({
-          k: "quick",
-          a: "feishu.quick_actions.help",
-          q: "/help",
-          c: { u: "u123", h: "chat1", t: "group", e: Date.now() + 60_000 },
-        }),
-        tag: "button",
+  it("does not log raw duplicate callback tokens", async () => {
+    const log = vi.fn();
+    const callbackToken = "test-token-placeholder";
+    const event = createStructuredQuickActionEvent({
+      token: callbackToken,
+      action: "feishu.quick_actions.help",
+      command: "/help",
+    });
+
+    await handleFeishuCardAction({ cfg, event, runtime: { ...runtime, log } });
+    await handleFeishuCardAction({ cfg, event, runtime: { ...runtime, log } });
+
+    const logs = log.mock.calls.flat().join("\n");
+    expect(handleFeishuMessage).toHaveBeenCalledTimes(1);
+    expect(logs).toContain("skipping duplicate card action token");
+    expect(logs).not.toContain(callbackToken);
+  });
+
+  it("does not cache callback tokens when token ttl expiry overflows", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(8_640_000_000_000_000));
+    const event = createCardActionEvent({
+      token: "tok10-boundary",
+      actionValue: { text: "/help" },
+    });
+
+    await handleFeishuCardAction({ cfg, event, runtime });
+    await handleFeishuCardAction({ cfg, event, runtime });
+
+    expect(handleFeishuMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects empty callback tokens before dispatch", async () => {
+    const log = vi.fn();
+    const event = createStructuredQuickActionEvent({
+      token: "   ",
+      action: "feishu.quick_actions.help",
+      command: "/help",
+    });
+
+    await handleFeishuCardAction({
+      cfg,
+      event,
+      runtime: {
+        ...runtime,
+        log,
       },
-      context: { open_id: "u123", user_id: "uid1", chat_id: "chat1" },
-    };
+    });
+
+    expect(handleFeishuMessage).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith(
+      "feishu[mock-account]: rejected card action from u123: missing token",
+    );
+  });
+
+  it("keeps a claimed token completed after a non-retryable dispatch failure", async () => {
+    const event = createStructuredQuickActionEvent({
+      token: "tok11",
+      action: "feishu.quick_actions.help",
+      command: "/help",
+    });
     vi.mocked(handleFeishuMessage)
       .mockRejectedValueOnce(new Error("transient"))
       .mockResolvedValueOnce(undefined as never);
@@ -362,7 +655,7 @@ describe("Feishu Card Action Handler", () => {
     await expect(handleFeishuCardAction({ cfg, event, runtime })).rejects.toThrow("transient");
     await handleFeishuCardAction({ cfg, event, runtime });
 
-    expect(handleFeishuMessage).toHaveBeenCalledTimes(2);
+    expect(handleFeishuMessage).toHaveBeenCalledTimes(1);
   });
 
   it("keeps an in-flight token claimed while a slow dispatch is still running", async () => {

@@ -1,15 +1,105 @@
-import type { BaseTokenResolution } from "../../../src/channels/plugins/types.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import { normalizeResolvedSecretInputString } from "../../../src/config/types.secrets.js";
-import type { TelegramAccountConfig } from "../../../src/config/types.telegram.js";
-import { tryReadSecretFileSync } from "../../../src/infra/secret-file.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../src/routing/session-key.js";
+// Telegram plugin module implements token behavior.
+import { resolveNormalizedAccountEntry } from "openclaw/plugin-sdk/account-core";
+import type { BaseTokenResolution } from "openclaw/plugin-sdk/channel-contract";
+import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+  normalizeOptionalAccountId,
+} from "openclaw/plugin-sdk/routing";
+import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
+import {
+  normalizeSecretInputString,
+  resolveSecretInputString,
+} from "openclaw/plugin-sdk/secret-input";
+import { canResolveEnvSecretRefInReadOnlyPath } from "openclaw/plugin-sdk/secret-ref-readonly";
+import { resolveDefaultTelegramAccountId } from "./account-selection.js";
 
-export type TelegramTokenSource = "env" | "tokenFile" | "config" | "none";
+type CredentialUnavailableDiagnostic = Extract<
+  ReturnType<typeof tryReadSecretFileSync>,
+  { status: "configured_unavailable" }
+>["diagnostic"];
+
+type TelegramTokenSource = "env" | "tokenFile" | "config" | "none";
 
 export type TelegramTokenResolution = BaseTokenResolution & {
   source: TelegramTokenSource;
+  credentialDiagnostics?: CredentialUnavailableDiagnostic[];
 };
+
+type RuntimeTokenValueResolution =
+  | { status: "available"; value: string }
+  | { status: "configured_unavailable" }
+  | { status: "missing" };
+
+function resolveEnvSecretRefValue(params: {
+  cfg?: Pick<OpenClawConfig, "secrets">;
+  provider: string;
+  id: string;
+}): string | undefined {
+  // Share admission with inspection while retaining strict diagnostics below.
+  if (canResolveEnvSecretRefInReadOnlyPath(params)) {
+    return normalizeSecretInputString(process.env[params.id]);
+  }
+  const providerConfig = params.cfg?.secrets?.providers?.[params.provider];
+  if (!providerConfig) {
+    throw new Error(
+      `Secret provider "${params.provider}" is not configured (ref: env:${params.provider}:${params.id}).`,
+    );
+  }
+  if (providerConfig.source !== "env") {
+    throw new Error(
+      `Secret provider "${params.provider}" has source "${providerConfig.source}" but ref requests "env".`,
+    );
+  }
+  throw new Error(
+    `Environment variable "${params.id}" is not allowlisted in secrets.providers.${params.provider}.allowlist.`,
+  );
+}
+
+function resolveRuntimeTokenValue(params: {
+  cfg?: Pick<OpenClawConfig, "secrets">;
+  value: unknown;
+  path: string;
+}): RuntimeTokenValueResolution {
+  const resolved = resolveSecretInputString({
+    value: params.value,
+    path: params.path,
+    defaults: params.cfg?.secrets?.defaults,
+    mode: "inspect",
+  });
+  if (resolved.status === "available") {
+    return {
+      status: "available",
+      value: resolved.value,
+    };
+  }
+  if (resolved.status === "missing") {
+    return { status: "missing" };
+  }
+  if (resolved.ref.source === "env") {
+    const envValue = resolveEnvSecretRefValue({
+      cfg: params.cfg,
+      provider: resolved.ref.provider,
+      id: resolved.ref.id,
+    });
+    if (envValue) {
+      return {
+        status: "available",
+        value: envValue,
+      };
+    }
+    return { status: "configured_unavailable" };
+  }
+  // Runtime resolution stays strict for non-env SecretRefs.
+  resolveSecretInputString({
+    value: params.value,
+    path: params.path,
+    defaults: params.cfg?.secrets?.defaults,
+    mode: "strict",
+  });
+  return { status: "configured_unavailable" };
+}
 
 type ResolveTelegramTokenOpts = {
   envToken?: string | null;
@@ -21,72 +111,114 @@ export function resolveTelegramToken(
   cfg?: OpenClawConfig,
   opts: ResolveTelegramTokenOpts = {},
 ): TelegramTokenResolution {
-  const accountId = normalizeAccountId(opts.accountId);
+  const requestedAccountId = normalizeOptionalAccountId(opts.accountId);
+  const accountId =
+    requestedAccountId ?? (cfg ? resolveDefaultTelegramAccountId(cfg) : DEFAULT_ACCOUNT_ID);
   const telegramCfg = cfg?.channels?.telegram;
 
   // Account IDs are normalized for routing (e.g. lowercased). Config keys may not
   // be normalized, so resolve per-account config by matching normalized IDs.
   const resolveAccountCfg = (id: string): TelegramAccountConfig | undefined => {
     const accounts = telegramCfg?.accounts;
-    if (!accounts || typeof accounts !== "object" || Array.isArray(accounts)) {
-      return undefined;
-    }
-    // Direct hit (already normalized key)
-    const direct = accounts[id];
-    if (direct) {
-      return direct;
-    }
-    // Fallback: match by normalized key
-    const matchKey = Object.keys(accounts).find((key) => normalizeAccountId(key) === id);
-    return matchKey ? accounts[matchKey] : undefined;
+    return Array.isArray(accounts)
+      ? undefined
+      : resolveNormalizedAccountEntry(accounts, id, normalizeAccountId);
   };
 
   const accountCfg = resolveAccountCfg(
     accountId !== DEFAULT_ACCOUNT_ID ? accountId : DEFAULT_ACCOUNT_ID,
   );
-  const accountTokenFile = accountCfg?.tokenFile?.trim();
-  if (accountTokenFile) {
-    const token = tryReadSecretFileSync(
-      accountTokenFile,
-      `channels.telegram.accounts.${accountId}.tokenFile`,
-      { rejectSymlink: true },
-    );
-    if (token) {
-      return { token, source: "tokenFile" };
+
+  // When a non-default accountId is explicitly specified but not found in config,
+  // decide whether to fall through to channel-level defaults based on whether
+  // the config has an explicit accounts section (multi-bot setup).
+  //
+  // Multi-bot: accounts section exists with entries → block fallthrough to prevent
+  // routing via the wrong bot's token.
+  //
+  // Single-bot: no accounts section (or empty) → allow fallthrough so that
+  // binding-created accountIds inherit the channel-level token.
+  // See: https://github.com/openclaw/openclaw/issues/53876
+  if (accountId !== DEFAULT_ACCOUNT_ID && !accountCfg) {
+    const accounts = telegramCfg?.accounts;
+    const hasConfiguredAccounts =
+      Boolean(accounts) &&
+      typeof accounts === "object" &&
+      !Array.isArray(accounts) &&
+      Object.keys(accounts).length > 0;
+    if (hasConfiguredAccounts) {
+      opts.logMissingFile?.(
+        `channels.telegram.accounts: unknown accountId "${accountId}" — not found in config, refusing channel-level fallback`,
+      );
+      return { token: "", source: "none" };
     }
-    opts.logMissingFile?.(
-      `channels.telegram.accounts.${accountId}.tokenFile not found or unreadable: ${accountTokenFile}`,
-    );
-    return { token: "", source: "none" };
   }
 
-  const accountToken = normalizeResolvedSecretInputString({
+  const accountTokenFile = accountCfg?.tokenFile?.trim();
+  if (accountTokenFile) {
+    const result = tryReadSecretFileSync(
+      accountTokenFile,
+      "Telegram bot token",
+      { rejectSymlink: true },
+      { configPath: `channels.telegram.accounts.${accountId}.tokenFile` },
+    );
+    if (result.status === "available") {
+      return { token: result.value, source: "tokenFile" };
+    }
+    opts.logMissingFile?.(
+      `channels.telegram.accounts.${accountId}.tokenFile is configured but unavailable`,
+    );
+    return {
+      token: "",
+      source: "tokenFile",
+      credentialDiagnostics: [result.diagnostic],
+    };
+  }
+
+  const accountToken = resolveRuntimeTokenValue({
+    cfg,
     value: accountCfg?.botToken,
     path: `channels.telegram.accounts.${accountId}.botToken`,
   });
-  if (accountToken) {
-    return { token: accountToken, source: "config" };
+  if (accountToken.status === "available") {
+    return { token: accountToken.value, source: "config" };
+  }
+  if (accountToken.status === "configured_unavailable") {
+    return { token: "", source: "none" };
   }
 
   const allowEnv = accountId === DEFAULT_ACCOUNT_ID;
   const tokenFile = telegramCfg?.tokenFile?.trim();
   if (tokenFile) {
-    const token = tryReadSecretFileSync(tokenFile, "channels.telegram.tokenFile", {
-      rejectSymlink: true,
-    });
-    if (token) {
-      return { token, source: "tokenFile" };
+    const result = tryReadSecretFileSync(
+      tokenFile,
+      "Telegram bot token",
+      {
+        rejectSymlink: true,
+      },
+      { configPath: "channels.telegram.tokenFile" },
+    );
+    if (result.status === "available") {
+      return { token: result.value, source: "tokenFile" };
     }
-    opts.logMissingFile?.(`channels.telegram.tokenFile not found or unreadable: ${tokenFile}`);
-    return { token: "", source: "none" };
+    opts.logMissingFile?.("channels.telegram.tokenFile is configured but unavailable");
+    return {
+      token: "",
+      source: "tokenFile",
+      credentialDiagnostics: [result.diagnostic],
+    };
   }
 
-  const configToken = normalizeResolvedSecretInputString({
+  const configToken = resolveRuntimeTokenValue({
+    cfg,
     value: telegramCfg?.botToken,
     path: "channels.telegram.botToken",
   });
-  if (configToken) {
-    return { token: configToken, source: "config" };
+  if (configToken.status === "available") {
+    return { token: configToken.value, source: "config" };
+  }
+  if (configToken.status === "configured_unavailable") {
+    return { token: "", source: "none" };
   }
 
   const envToken = allowEnv ? (opts.envToken ?? process.env.TELEGRAM_BOT_TOKEN)?.trim() : "";

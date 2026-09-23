@@ -1,40 +1,133 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { probeIMessage } from "./probe.js";
+// Imessage tests cover probe plugin behavior.
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  getCachedIMessagePrivateApiStatus,
+  setCachedIMessagePrivateApiStatus,
+} from "./private-api-status.js";
+import { imessageRpcSupportsMethod } from "./probe.js";
 
-const detectBinaryMock = vi.hoisted(() => vi.fn());
-const runCommandWithTimeoutMock = vi.hoisted(() => vi.fn());
-const createIMessageRpcClientMock = vi.hoisted(() => vi.fn());
-
-vi.mock("../../../src/commands/onboard-helpers.js", () => ({
-  detectBinary: (...args: unknown[]) => detectBinaryMock(...args),
-}));
-
-vi.mock("../../../src/process/exec.js", () => ({
-  runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
-}));
-
-vi.mock("./client.js", () => ({
-  createIMessageRpcClient: (...args: unknown[]) => createIMessageRpcClientMock(...args),
-}));
-
-beforeEach(() => {
-  detectBinaryMock.mockClear().mockResolvedValue(true);
-  runCommandWithTimeoutMock.mockClear().mockResolvedValue({
-    stdout: "",
-    stderr: 'unknown command "rpc" for "imsg"',
-    code: 1,
-    signal: null,
-    killed: false,
-  });
-  createIMessageRpcClientMock.mockClear();
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
-describe("probeIMessage", () => {
-  it("marks unknown rpc subcommand as fatal", async () => {
-    const result = await probeIMessage(1000, { cliPath: "imsg" });
-    expect(result.ok).toBe(false);
-    expect(result.fatal).toBe(true);
-    expect(result.error).toMatch(/rpc/i);
-    expect(createIMessageRpcClientMock).not.toHaveBeenCalled();
+describe("imessageRpcSupportsMethod", () => {
+  it("returns false when the bridge is not available", () => {
+    expect(
+      imessageRpcSupportsMethod(
+        {
+          available: false,
+          v2Ready: false,
+          selectors: {},
+          rpcMethods: ["typing", "read"],
+        },
+        "typing",
+      ),
+    ).toBe(false);
+  });
+
+  it("returns false when status is undefined", () => {
+    expect(imessageRpcSupportsMethod(undefined, "typing")).toBe(false);
+  });
+
+  it("returns true when the requested method is in the explicit rpcMethods list", () => {
+    expect(
+      imessageRpcSupportsMethod(
+        {
+          available: true,
+          v2Ready: true,
+          selectors: {},
+          rpcMethods: ["chats.list", "send", "typing", "read"],
+        },
+        "typing",
+      ),
+    ).toBe(true);
+  });
+
+  it("returns false for a method not in the explicit rpcMethods list", () => {
+    expect(
+      imessageRpcSupportsMethod(
+        {
+          available: true,
+          v2Ready: true,
+          selectors: {},
+          rpcMethods: ["chats.list", "send"],
+        },
+        "typing",
+      ),
+    ).toBe(false);
+  });
+
+  it("falls back to the foundational set when rpcMethods is empty (older imsg builds)", () => {
+    // Older imsg builds shipped chats.list/send/watch.*/messages.history
+    // before the rpc_methods capability list existed. Without this fallback
+    // we'd silently break send() on every gateway running an older imsg.
+    const oldBuild = {
+      available: true,
+      v2Ready: true,
+      selectors: {},
+      rpcMethods: [],
+    };
+    for (const method of [
+      "chats.list",
+      "messages.history",
+      "watch.subscribe",
+      "watch.unsubscribe",
+      "send",
+    ]) {
+      expect(imessageRpcSupportsMethod(oldBuild, method)).toBe(true);
+    }
+  });
+
+  it("gates newer methods off when rpcMethods is empty (forces upgrade for typing/read/group)", () => {
+    const oldBuild = {
+      available: true,
+      v2Ready: true,
+      selectors: {},
+      rpcMethods: [],
+    };
+    for (const method of [
+      "typing",
+      "read",
+      "chats.create",
+      "chats.delete",
+      "chats.markUnread",
+      "group.rename",
+      "group.setIcon",
+      "group.addParticipant",
+      "group.removeParticipant",
+      "group.leave",
+    ]) {
+      expect(imessageRpcSupportsMethod(oldBuild, method)).toBe(false);
+    }
+  });
+});
+
+describe("iMessage private API status cache", () => {
+  const availableStatus = {
+    available: true,
+    v2Ready: true,
+    selectors: {},
+    rpcMethods: ["chats.list"],
+  };
+
+  it("drops expiring private API status when the current clock is not a valid date timestamp", () => {
+    setCachedIMessagePrivateApiStatus(
+      "imsg-invalid-private-clock",
+      availableStatus,
+      1_700_000_030_000,
+    );
+    vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
+
+    expect(getCachedIMessagePrivateApiStatus("imsg-invalid-private-clock")).toBeUndefined();
+  });
+
+  it("does not cache private API status with an invalid expiry timestamp", () => {
+    setCachedIMessagePrivateApiStatus(
+      "imsg-overflow-private-clock",
+      availableStatus,
+      Number.POSITIVE_INFINITY,
+    );
+
+    expect(getCachedIMessagePrivateApiStatus("imsg-overflow-private-clock")).toBeUndefined();
   });
 });

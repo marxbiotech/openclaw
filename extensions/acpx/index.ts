@@ -1,18 +1,25 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/acpx";
-import { createAcpxPluginConfigSchema } from "./src/config.js";
-import { createAcpxRuntimeService } from "./src/service.js";
+/**
+ * ACPX runtime plugin entry. It registers the embedded ACP backend service and
+ * wires reply-dispatch hooks into the plugin SDK runtime.
+ */
+import { tryDispatchAcpReplyHook } from "openclaw/plugin-sdk/acp-backend";
+import { createAcpxRuntimeService } from "./register.runtime.js";
+import type { OpenClawPluginApi } from "./runtime-api.js";
+import { registerPiSessionCatalog } from "./src/pi-session-catalog-plugin.js";
 
 const plugin = {
   id: "acpx",
   name: "ACPX Runtime",
-  description: "ACP runtime backend powered by the acpx CLI.",
-  configSchema: createAcpxPluginConfigSchema(),
+  description: "Embedded ACP runtime backend with plugin-owned session and transport management.",
   register(api: OpenClawPluginApi) {
+    registerPiSessionCatalog(api);
     api.registerService(
       createAcpxRuntimeService({
         pluginConfig: api.pluginConfig,
+        openKeyedStore: (options) => api.runtime.state.openKeyedStore(options),
       }),
     );
+    api.on("reply_dispatch", tryDispatchAcpReplyHook, { eligibleDispatchKinds: ["acp"] });
   },
 };
 

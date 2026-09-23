@@ -1,13 +1,7 @@
-import {
-  buildSecretInputSchema,
-  hasConfiguredSecretInput,
-  normalizeResolvedSecretInputString,
-  normalizeSecretInputString,
-} from "openclaw/plugin-sdk/zalo";
-
+// Zalo plugin module implements secret input behavior.
 export {
   buildSecretInputSchema,
-  hasConfiguredSecretInput,
-  normalizeResolvedSecretInputString,
   normalizeSecretInputString,
-};
+  resolveSecretInputString,
+} from "openclaw/plugin-sdk/secret-input";
+export type { SecretInputStringResolutionMode } from "openclaw/plugin-sdk/secret-input";
