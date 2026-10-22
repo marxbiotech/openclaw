@@ -80,10 +80,10 @@ describe("Dockerfile", () => {
   it("uses full bookworm for build stages and slim bookworm for runtime", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     expect(dockerfile).toContain(
-      'ARG OPENCLAW_NODE_BOOKWORM_IMAGE="docker.io/library/node:24-bookworm@sha256:934240a162082fd8b8a2f90cd5114446443f1eba1c5378f6687167ca405e6584"',
+      'ARG OPENCLAW_NODE_BOOKWORM_IMAGE="docker.io/library/node:24.22.1-bookworm@sha256:6449e19d8184d84062525b6a7524def03146c2cb04a7f08b076680d0e8e4240a"',
     );
     expect(dockerfile).toContain(
-      'ARG OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE="docker.io/library/node:24-bookworm-slim@sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03"',
+      'ARG OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE="docker.io/library/node:24.22.1-bookworm-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205"',
     );
     expect(dockerfile).toContain(
       'ARG OPENCLAW_BUN_IMAGE="docker.io/oven/bun:1.4.0@sha256:5ff609364c049b54eb0ff560ec96319729a972078ef2c755d758f0c6ef89c2d6"',
