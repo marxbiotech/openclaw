@@ -9,6 +9,10 @@ import { deliverAgentCommandResult } from "../agents/command/delivery.runtime.js
 import { persistAcpTurnTranscript } from "../agents/command/transcript-persistence.js";
 import { getTranscriptMessageRole } from "../agents/embedded-agent-runner/message-visibility.js";
 import * as embeddedModule from "../agents/embedded-agent.js";
+import {
+  getGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+} from "../agents/tools/gateway-caller-context.js";
 import { readAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
 import * as configIoModule from "../config/io.js";
 import { loadTranscriptEvents } from "../config/sessions/session-accessor.js";
@@ -508,6 +512,27 @@ describe("agentCommand ACP runtime routing", () => {
       expect(assistantEvents.every((event) => !event.text)).toBe(true);
       expect(logLines.join("\n")).not.toContain("NO_REPLY");
       expect(logLines).toStrictEqual([]);
+    });
+  });
+
+  it("runs the ACP turn outside the launching tool's caller identity", async () => {
+    await withAcpSessionEnv(async () => {
+      let observed: ReturnType<typeof getGatewayToolCallerIdentity> | null = null;
+      const runTurn = vi.fn(async (input: unknown) => {
+        observed = getGatewayToolCallerIdentity();
+        const params = input as Parameters<
+          ReturnType<typeof acpManagerModule.getAcpSessionManager>["runTurn"]
+        >[0];
+        await params.onEvent?.({ type: "done", status: "completed", stopReason: "stop" });
+      });
+      mockAcpManager({ runTurn });
+
+      await withGatewayToolCallerIdentity({ agentId: "main", sessionKey: "agent:main:main" }, () =>
+        agentCommand({ message: "probe", sessionKey: "agent:codex:acp:test", json: true }, runtime),
+      );
+
+      expect(runTurn).toHaveBeenCalledOnce();
+      expect(observed).toBeUndefined();
     });
   });
 
