@@ -53,6 +53,18 @@ function expectVersionMetadataToBeMissing(moduleUrl: string) {
 }
 
 describe("version resolution", () => {
+  it.each(["openclaw", "@marxbiotech/openclaw"])(
+    "resolves %s package version from nested dist/plugin-sdk module URL",
+    async (name) => {
+      await withVersionFixtureDir(async (root) => {
+        await writeJsonFixture(root, "package.json", { name, version: "1.2.3" });
+        const moduleUrl = await ensureModuleFixture(root);
+        expect(readVersionFromPackageJsonForModuleUrl(moduleUrl)).toBe("1.2.3");
+        expect(resolveVersionFromModuleUrl(moduleUrl)).toBe("1.2.3");
+      });
+    },
+  );
+
   it("ignores unrelated nearby package.json files", async () => {
     await withVersionFixtureDir(async (root) => {
       await writeJsonFixture(root, "package.json", { name: "openclaw", version: "2.3.4" });

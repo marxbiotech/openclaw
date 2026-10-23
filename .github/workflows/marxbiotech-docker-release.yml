@@ -4,8 +4,8 @@ on:
   push:
     tags: ["mb*"]
 
-# Fork images have their own version tags; upstream's release orchestrator owns
-# npm, Docker Hub, and upstream channel promotion.
+# Fork images use mb version tags. The matching fork npm lane lives in
+# openclaw-npm-release.yml; upstream owns Docker Hub and its channel promotion.
 concurrency:
   group: marxbiotech-docker-release
   cancel-in-progress: false
@@ -35,9 +35,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          [[ "$GITHUB_REF_NAME" =~ ^mb([0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*)-beta\.[1-9][0-9]*$ ]]
-          version="${BASH_REMATCH[1]}"
-          test "$(node -p 'require("./package.json").version')" = "$version"
+          identity="$(node scripts/marxbiotech-npm-release.mjs identity "$GITHUB_REF_NAME")"
+          version="$(jq -er .sourceVersion <<< "$identity")"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$GITHUB_REF_NAME" --jq '.object | select(.type == "commit") | .sha')" = "$GITHUB_SHA"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "created=$(date --utc --date="$(git show -s --format=%cI HEAD)" +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
