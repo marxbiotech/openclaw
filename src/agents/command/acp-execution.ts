@@ -1,3 +1,5 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { createLazyAcpPermissionHandler } from "../../acp/control-plane/permission-handler-lazy.js";
 import { createLazyAcpElicitationHandler } from "../../auto-reply/reply/acp-elicitation-handler-lazy.js";
 import { resolveInlineAgentImageAttachments } from "../../auto-reply/reply/agent-turn-attachments.js";
 import { recordAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
@@ -15,6 +17,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { isSubagentCoordinationInputProvenance } from "../../sessions/input-provenance.js";
+import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
 import {
   getAdmittedRunDelegatedAuthority,
   type PreparedAgentRunAdmission,
@@ -166,6 +169,28 @@ export async function runAcpAgentCommand(params: {
       },
       isActive: isElicitationActive,
     });
+    const onNativePermissionRequest = createLazyAcpPermissionHandler({
+      admittedRunContext,
+      agentId: params.sessionAgentId,
+      sessionKey: params.sessionKey,
+      route: {
+        parentSessionKey: normalizeOptionalString(
+          params.sessionEntry?.completionOwnerSessionKey ??
+            params.sessionEntry?.spawnedBy ??
+            params.opts.spawnedBy ??
+            undefined,
+        ),
+        fallback: params.opts.channel
+          ? {
+              channel: params.opts.channel,
+              to: params.opts.to ?? params.opts.replyTo,
+              accountId: params.opts.accountId,
+              threadId: params.opts.threadId,
+            }
+          : deliveryContextFromSession(params.sessionEntry),
+      },
+      isActive: isElicitationActive,
+    });
     await params.acpManager.runTurn({
       admittedRunContext,
       cfg: params.cfg,
@@ -178,6 +203,7 @@ export async function runAcpAgentCommand(params: {
       requestId: params.runId,
       signal: params.opts.abortSignal,
       onElicitation,
+      onNativePermissionRequest,
       onBeforePrompt: async () => {
         const recorder = params.opts.userTurnTranscriptRecorder;
         if (recorder && !recorder.hasPersisted() && !(await recorder.persistApproved())) {

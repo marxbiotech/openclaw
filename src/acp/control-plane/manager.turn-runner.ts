@@ -1,4 +1,8 @@
-import type { AcpRuntime, AcpRuntimeHandle } from "@openclaw/acp-core/runtime/types";
+import type {
+  AcpPermissionHandler,
+  AcpRuntime,
+  AcpRuntimeHandle,
+} from "@openclaw/acp-core/runtime/types";
 import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { expectDefined } from "@openclaw/normalization-core";
 import {
@@ -282,6 +286,7 @@ export async function runManagerTurn(params: {
         let modelExecution: ReturnType<typeof bindOperatorModelExecution>;
         const onModelRevoked = () =>
           params.acceptedTurn.abortController.abort(modelExecution?.signal.reason);
+        const permissionLifetime = new AbortController();
         try {
           const ensured = await params.ensureRuntimeHandle({
             readAcpControl: () => params.acceptedTurn.cancelConstraint,
@@ -366,6 +371,28 @@ export async function runManagerTurn(params: {
           activeTurnStarted = true;
           const turnToCancel = activeTurn;
           const eventGate = { open: true };
+          const relayPermission = input.onNativePermissionRequest;
+          const backendId = ensured.meta.backend;
+          const cwd = handle.cwd;
+          const onNativePermissionRequest: AcpPermissionHandler | undefined = relayPermission
+            ? async (request, context) => {
+                try {
+                  return await relayPermission(request, {
+                    signal: AbortSignal.any([
+                      context.signal,
+                      permissionLifetime.signal,
+                      params.acceptedTurn.abortController.signal,
+                    ]),
+                    backendId,
+                    cwd,
+                    assertActive: assertActorCurrent,
+                  });
+                } catch {
+                  // A missing approval runtime must never select a backend's permissive fallback.
+                  return { outcome: "cancel" };
+                }
+              }
+            : undefined;
           const turnPromise = consumeAcpTurnStream({
             runtime,
             turn: {
@@ -376,6 +403,7 @@ export async function runManagerTurn(params: {
               requestId: input.requestId,
               signal: input.signal,
               onElicitation: input.onElicitation,
+              ...(onNativePermissionRequest ? { onNativePermissionRequest } : {}),
             },
             eventGate,
             onBeforePrompt: async () => {
@@ -549,6 +577,7 @@ export async function runManagerTurn(params: {
           }
           break;
         } finally {
+          permissionLifetime.abort(new Error("ACP backend attempt settled"));
           // A producer terminal does not release actor custody while cancellation is still active.
           await activeTurn?.cancelPromise?.catch(() => {});
           modelExecution?.signal.removeEventListener("abort", onModelRevoked);

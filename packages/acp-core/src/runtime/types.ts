@@ -146,7 +146,7 @@ export type AcpRuntimeTurnInput = {
   /** Handles provider-neutral user input requests owned by this exact turn. */
   onElicitation?: AcpElicitationHandler;
   /** Relays unresolved native permissions to the host's existing approval owner. */
-  onPermissionRequest?: AcpPermissionHandler;
+  onNativePermissionRequest?: AcpPermissionHandler;
 };
 
 export type AcpRuntimeCapabilities = {
