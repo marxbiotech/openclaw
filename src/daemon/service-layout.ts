@@ -4,6 +4,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { consumeRootCommandOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
 import { pathExists } from "../infra/fs-safe.js";
+import { isOpenClawPackageName } from "../infra/openclaw-package-identity.js";
 import { readPackageName, readPackageVersion } from "../infra/package-json.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { isBunRuntime, resolveRuntimeScriptPosition } from "./runtime-binary.js";
@@ -53,7 +54,7 @@ export async function resolveGatewayServiceInstallationRefreshRoot(params: {
     (state.definitionMutationCapability?.kind ?? "writable") !== "writable" ||
     hasGatewayServiceLauncherOverride(command) ||
     resolveManagedGatewayServiceProcessEnv(command, state.env) === null ||
-    (await readPackageName(root)) !== "openclaw" ||
+    !isOpenClawPackageName(await readPackageName(root)) ||
     (await isGatewayServiceSourceCheckoutRoot(root))
   ) {
     return undefined;
@@ -214,7 +215,7 @@ async function resolveOpenClawPackageRoot(entrypoint: string): Promise<string | 
   // Installed dist entrypoints can sit several levels below package root in
   // pnpm layouts; bound the walk to avoid scanning arbitrary filesystem depth.
   for (let depth = 0; depth < 8; depth += 1) {
-    if ((await readPackageName(current)) === "openclaw") {
+    if (isOpenClawPackageName(await readPackageName(current))) {
       return current;
     }
     const next = path.dirname(current);
