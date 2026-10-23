@@ -60,7 +60,7 @@ import type {
   SourceReplyDeliveryMode,
 } from "../get-reply-options.types.js";
 import type { FinalizedRuntimeMsgContext } from "../templating.js";
-import { createLazyAcpElicitationHandler } from "./acp-elicitation-handler-lazy.js";
+import { createAcpDispatchInteractionHandlers } from "./acp-dispatch-interaction-handlers.js";
 import { createAcpReplyProjector } from "./acp-projector.js";
 import {
   collectDescribedImageAttachmentIndexes,
@@ -610,7 +610,7 @@ export async function tryDispatchAcpReplyCore(
     }).admit("acp");
     recordAcceptedSessionParticipantInput(params.ctx, participantTarget);
     const turnAdmission = admittedRunContext;
-    const elicitationParams = {
+    const interactions = createAcpDispatchInteractionHandlers(params.ctx, admittedRunContext, {
       sourceSessionKey: sessionKey,
       targetSessionKey: canonicalSessionKey,
       outerRequestId: requestId,
@@ -621,8 +621,7 @@ export async function tryDispatchAcpReplyCore(
         params.abortSignal?.aborted !== true &&
         admittedRunContext === turnAdmission &&
         getAdmittedRunDelegatedAuthority(turnAdmission) !== undefined,
-    };
-    const onElicitation = createLazyAcpElicitationHandler(elicitationParams);
+    });
     // ACP can act before its terminal transcript arrives. Consume accepted input
     // before submission while leaving final assistant/outcome persistence below.
     await persistInput?.();
@@ -644,7 +643,7 @@ export async function tryDispatchAcpReplyCore(
       mode: "prompt",
       requestId,
       ...(params.abortSignal ? { signal: params.abortSignal } : {}),
-      onElicitation,
+      ...interactions,
       onLifecycle: recordUnsupportedNativeActionEvidence,
       onEvent: async (event) => {
         auditRuntime.emitAcpRuntimeEvent({

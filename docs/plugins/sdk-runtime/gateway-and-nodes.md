@@ -659,3 +659,29 @@ matching `registerNodeHostCommand` registration. Keep backend handles bound to
 the selected node and session owner. Node execution still requires command
 allowlisting, a node invoke policy, and live node-local execution authorization;
 registering an ACP backend grants none of those permissions.
+
+`AcpRuntimeTurnInput.onNativePermissionRequest` is a per-turn host capability
+for unresolved native harness permissions. Relay its request and result over the
+invocation's existing duplex channel. The callback accepts `AcpPermissionRequest`
+and a request-owned `AbortSignal`; it returns an `AcpPermissionDecision`.
+Missing callbacks, cancellation, expired requests, disconnects, and stale turns
+must fail closed, never fall through to an automatic permission grant. The name
+is distinct from the acpx-typed `onPermissionRequest` that native agent harness
+attempts pass to the bundled ACPX runtime.
+
+The ingress that admits the turn builds the callback and the ACP manager binds it
+to the selected backend and backend-attempt lifetime. It uses the existing
+plugin approval owner and configured channel reviewers. Spawned child requests
+ask in the spawning parent session's current delivery route; turns from a bound
+conversation ask in that conversation. Native session IDs, tool IDs, and request
+text are correlation/display facts, not execution authority. A backend must stop
+pending callbacks when its invocation ends and check that lifetime again before
+returning an allowed answer to the native harness.
+
+The host offers **Allow once** and **Deny**, and only returns `allow_once` when
+the native request explicitly advertises that option. It never translates a
+one-shot approval into `allow_always`. Native harness auto modes remain
+responsible for work they already permit; this callback handles only requests
+they still require a human to approve. It does not change node launch policy,
+enable a native bypass mode, or create a second approval store. The bundled
+local ACPX adapter does not consume it.

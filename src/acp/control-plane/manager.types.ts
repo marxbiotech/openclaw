@@ -1,6 +1,8 @@
 /** Shared types and dependency wiring for the ACP session manager control plane. */
 import type {
   AcpElicitationHandler,
+  AcpPermissionDecision,
+  AcpPermissionRequest,
   AcpRuntime,
   AcpRuntimeCapabilities,
   AcpRuntimeEvent,
@@ -77,6 +79,18 @@ export type AcpInitializeSessionInput = {
 
 export type AcpTurnAttachment = AcpRuntimeTurnAttachment;
 
+/** Host relay for native permissions; the manager supplies backend facts and attempt lifetime. */
+export type AcpManagerPermissionHandler = (
+  request: AcpPermissionRequest,
+  context: {
+    signal: AbortSignal;
+    backendId: string;
+    cwd?: string;
+    /** Throws once the owning manager actor no longer holds this turn. */
+    assertActive?: () => void;
+  },
+) => Promise<AcpPermissionDecision | undefined>;
+
 /** Input for one ACP prompt turn routed through the manager. */
 export type AcpRunTurnInput = {
   /** Private admitted execution context supplied by the owning host ingress. */
@@ -91,6 +105,8 @@ export type AcpRunTurnInput = {
   requestId: string;
   signal?: AbortSignal;
   onElicitation?: AcpElicitationHandler;
+  /** Relays unresolved native permissions to the turn owner's approval route; absent cancels. */
+  onNativePermissionRequest?: AcpManagerPermissionHandler;
   /** Throwable host admission fence immediately before runtime prompt submission. */
   onBeforePrompt?: () => Promise<void> | void;
   onLifecycle?: (event: AcpTurnLifecycleEvent) => Promise<void> | void;
