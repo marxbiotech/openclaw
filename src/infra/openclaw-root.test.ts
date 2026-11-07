@@ -115,6 +115,22 @@ describe("resolveOpenClawPackageRoot", () => {
       await import("./openclaw-root.js"));
   });
 
+  it.each(["@marxbiotech/openclaw", "openclaw"])(
+    "resolves the scoped distribution installed at %s",
+    async (directory) => {
+      const root = fx("scoped-distribution", directory, "node_modules", ...directory.split("/"));
+      const bin = fx("scoped-distribution", directory, "bin", "openclaw");
+      setPackageRoot(root, "@marxbiotech/openclaw");
+      state.realpaths.set(abs(bin), abs(path.join(root, "openclaw.mjs")));
+      await expectResolvedPackageRoot(
+        resolveOpenClawPackageRootSync,
+        resolveOpenClawPackageRoot,
+        { argv1: bin },
+        root,
+      );
+    },
+  );
+
   it.each([
     {
       name: "resolves package root from .bin argv1",

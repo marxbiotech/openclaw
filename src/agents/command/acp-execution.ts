@@ -1,3 +1,5 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { createLazyAcpPermissionHandler } from "../../acp/control-plane/permission-handler-lazy.js";
 import { createLazyAcpElicitationHandler } from "../../auto-reply/reply/acp-elicitation-handler-lazy.js";
 import { resolveInlineAgentImageAttachments } from "../../auto-reply/reply/agent-turn-attachments.js";
 import { recordAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
@@ -15,6 +17,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { isSubagentCoordinationInputProvenance } from "../../sessions/input-provenance.js";
+import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
 import {
   getAdmittedRunDelegatedAuthority,
   type PreparedAgentRunAdmission,
@@ -26,6 +29,7 @@ import {
 import { prepareInternalSessionEffectsSession } from "../internal-session-effects.js";
 import type { AgentRunSessionTarget } from "../run-session-target.types.js";
 import { isAgentRunRestartAbortReason } from "../run-termination.js";
+import { withoutGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
 import type { PreparedAgentCommandExecution } from "./prepare.js";
 import {
   loadAcpPolicyRuntime,
@@ -166,7 +170,34 @@ export async function runAcpAgentCommand(params: {
       },
       isActive: isElicitationActive,
     });
-    await params.acpManager.runTurn({
+    const onNativePermissionRequest = createLazyAcpPermissionHandler({
+      admittedRunContext,
+      agentId: params.sessionAgentId,
+      sessionKey: params.sessionKey,
+      route: {
+        parentSessionKey: normalizeOptionalString(
+          params.sessionEntry?.completionOwnerSessionKey ??
+            params.sessionEntry?.spawnedBy ??
+            params.opts.spawnedBy ??
+            undefined,
+        ),
+        fallback: params.opts.channel
+          ? {
+              channel: params.opts.channel,
+              to: params.opts.to ?? params.opts.replyTo,
+              accountId: params.opts.accountId,
+              threadId: params.opts.threadId,
+            }
+          : deliveryContextFromSession(params.sessionEntry),
+      },
+      isActive: isElicitationActive,
+    });
+    // This turn is the run's own admitted work. A launching tool's caller identity
+    // (sessions_spawn returns before the child turn starts) must not gate backend
+    // gateway calls, or they fail once that tool call settles.
+    const runTurn = (input: Parameters<typeof params.acpManager.runTurn>[0]) =>
+      withoutGatewayToolCallerIdentity(() => params.acpManager.runTurn(input));
+    await runTurn({
       admittedRunContext,
       cfg: params.cfg,
       sessionKey: params.sessionKey,
@@ -178,6 +209,7 @@ export async function runAcpAgentCommand(params: {
       requestId: params.runId,
       signal: params.opts.abortSignal,
       onElicitation,
+      onNativePermissionRequest,
       onBeforePrompt: async () => {
         const recorder = params.opts.userTurnTranscriptRecorder;
         if (recorder && !recorder.hasPersisted() && !(await recorder.persistApproved())) {

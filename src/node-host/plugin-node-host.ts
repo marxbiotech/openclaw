@@ -292,6 +292,14 @@ export async function invokeRegisteredNodeHostCommand(
                 assertActive,
                 readCurrent,
               }),
+            prepareConfiguredExecAuthorization: () =>
+              preparePluginExecAuthorization({
+                source: "configured-policy",
+                command,
+                sessionKey: context.sessionKey,
+                assertActive,
+                readCurrent,
+              }),
           }
         : undefined;
     return await withPluginRuntimeRegistryScope(registry, async () => {

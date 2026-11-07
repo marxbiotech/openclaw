@@ -462,6 +462,26 @@ applicable policy also requires fresh publication admission.
 
     `allow-always` remains one policy decision unless the node-invoke policy explicitly declares `standingApproval: { kind: "placement", scope: "<capability>" }`. That opt-in permits later launches only for a high-risk command on the same current managed placement, node pairing, environment owner, workspace, and semantic capability scope, for at most 30 days and never across Gateway restart. Use a stable, content-free scope for a capability whose approval deliberately covers later argument changes. Do not opt in when the approved target or other request arguments must remain exact.
 
+    Node command handlers that launch processes must also check node-local exec
+    policy. For an explicit human decision or host-admitted Session Full launch,
+    use `context.prepareExecAuthorization("human-approved" | "session-full")`.
+    For operator-configured unattended execution, use the separate optional
+    `context.prepareConfiguredExecAuthorization()` capability. It requires the
+    invocation agent's effective node-local `security: "full"`, `ask: "off"`,
+    and the canonical exec-approvals floor to permit that policy. A Gateway
+    plugin must separately authorize its exact node command and target through
+    its node-invoke policy; this capability does not grant Gateway permission,
+    Session Full, or a placement standing approval.
+
+    Both preparers return a synchronous guard. Call it immediately before each
+    process launch or use of a retained worker, after asynchronous preparation.
+    The guard rechecks the current node policy, approvals floor, plugin owner,
+    and invocation lifetime. Neither a guard nor its preparer may be reused
+    after that invocation completes or is canceled. Prepare a fresh guard for
+    each later invocation. If an older node host omits
+    `prepareConfiguredExecAuthorization`, fail closed with an upgrade message;
+    never substitute a human decision or Session Full source.
+
     A node command may declare `prepare(context)` for asynchronous native startup.
     Node-host initialization awaits it before publishing the initial manifest or
     connecting to the Gateway; plugin registration itself stays synchronous.
@@ -679,3 +699,50 @@ promise when the service is not usable until that promise settles; use the repor
 deliberately nonblocking work that owns its own stop path.
 
 Service startup and cleanup observation budgets measure elapsed time, so wall-clock changes do not shorten or extend them. Strict stop deadlines remain wall-clock epoch values and are converted once when stopping begins.
+
+## ACP execution backends
+
+The fork's `openclaw/plugin-sdk/acp-backend` entrypoint provides the typed
+`AcpRuntime` contract, `registerAcpRuntimeBackend`, `getAcpRuntimeBackend`,
+`unregisterAcpRuntimeBackend`, ACP runtime errors, and `tryDispatchAcpReplyHook`.
+It uses the same registry and reply dispatcher as the bundled ACPX plugin.
+The upstream v2026.11.1 package does not yet publish this typed entrypoint.
+
+Register the runtime when the plugin service starts. On stop, unregister only
+if `getAcpRuntimeBackend(id)?.runtime` still equals the service's own runtime,
+then settle its outstanding work. Use `tryDispatchAcpReplyHook` for the
+`reply_dispatch` hook with `eligibleDispatchKinds: ["acp"]` when providing ACP
+reply dispatch. Session admission, task state, cancellation policy, and delivery
+remain owned by the host's ACP control plane.
+
+A remote backend can delegate through `api.runtime.nodes.openDuplex` and a
+matching `registerNodeHostCommand` registration. Keep backend handles bound to
+the selected node and session owner. Node execution still requires command
+allowlisting, a node invoke policy, and live node-local execution authorization;
+registering an ACP backend grants none of those permissions.
+
+`AcpRuntimeTurnInput.onNativePermissionRequest` is a per-turn host capability
+for unresolved native harness permissions. Relay its request and result over the
+invocation's existing duplex channel. The callback accepts `AcpPermissionRequest`
+and a request-owned `AbortSignal`; it returns an `AcpPermissionDecision`.
+Missing callbacks, cancellation, expired requests, disconnects, and stale turns
+must fail closed, never fall through to an automatic permission grant. The name
+is distinct from the acpx-typed `onPermissionRequest` that native agent harness
+attempts pass to the bundled ACPX runtime.
+
+The ingress that admits the turn builds the callback and the ACP manager binds it
+to the selected backend and backend-attempt lifetime. It uses the existing
+plugin approval owner and configured channel reviewers. Spawned child requests
+ask in the spawning parent session's current delivery route; turns from a bound
+conversation ask in that conversation. Native session IDs, tool IDs, and request
+text are correlation/display facts, not execution authority. A backend must stop
+pending callbacks when its invocation ends and check that lifetime again before
+returning an allowed answer to the native harness.
+
+The host offers **Allow once** and **Deny**, and only returns `allow_once` when
+the native request explicitly advertises that option. It never translates a
+one-shot approval into `allow_always`. Native harness auto modes remain
+responsible for work they already permit; this callback handles only requests
+they still require a human to approve. It does not change node launch policy,
+enable a native bypass mode, or create a second approval store. The bundled
+local ACPX adapter does not consume it.

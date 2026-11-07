@@ -231,7 +231,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: the shared state-owner boundary for plugin CLIs.
       // +1: owner-approved service-bound remote Control UI ingress.
       // +2: shared database-engine host and worker adapters.
-      155,
+      // +1: ACP execution-backend registration without owning the control plane.
+      156,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -274,7 +275,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: async auth-provider preparation for Codex and voice model-session patches.
       // +1: isHostNoticePayload for agent-to-agent reply filtering.
       // +1: managed plugin resource root retained during redirected agent execution.
-      3761,
+      // +22: ACP execution-backend registration contract and its runtime types.
+      3783,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -310,7 +312,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: the same prepareAuthProfileProvider operation on model-session-runtime.
       // +1: the same host-notice classifier on reply-payload.
       // +1: managed plugin resource root retained during redirected agent execution.
-      2196,
+      // +5: ACP backend registration, lookup, error guard, and reply-hook dispatch.
+      2201,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
