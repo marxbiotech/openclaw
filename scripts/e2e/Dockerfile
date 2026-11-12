@@ -4,9 +4,9 @@
 # `bare` is a clean Node/Git runner for install/update lanes. `functional`
 # installs the prepared OpenClaw npm tarball into /app for built-app lanes.
 
-ARG OPENCLAW_NODE_ALPINE_IMAGE="docker.io/library/node:24.22.1-alpine@sha256:6a1c190e17215d844926b0677f4bf87273ff7d5e54db06d3b5b5863ab0b09a3d"
+ARG OPENCLAW_NODE_ALPINE_IMAGE="docker.io/library/node:24.22.3-alpine@sha256:116b800c3754b440ee0aa3ed2f20f5bf3d99a554bfd9adeea09ea8017f6e85f5"
 
-FROM node:24.22.1-bookworm-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205 AS e2e-runner
+FROM node:24.22.3-bookworm-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54 AS e2e-runner
 
 # openssl provisions short-lived fixture certificates for HTTPS-only provider
 # routes. python3 covers package/plugin install paths that execute helper scripts.
